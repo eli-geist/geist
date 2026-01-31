@@ -1,0 +1,65 @@
+services:
+  eli-telegram:
+    build: .
+    container_name: eli-telegram
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./stimme:/app/stimme:ro
+    networks:
+      - eli-network
+
+  eli-mcp:
+    build: .
+    container_name: eli-mcp
+    restart: unless-stopped
+    command: ["python", "-m", "eli.mcp"]
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - eli-network
+
+  eli-daemon:
+    build: .
+    container_name: eli-daemon
+    restart: unless-stopped
+    command: ["python", "-m", "eli.daemon.runner", "--mode", "scheduled"]
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./data:/app/data
+      - ./stimme:/app/stimme:ro
+    networks:
+      - eli-network
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: eli-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./website:/srv/website:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - eli-network
+
+networks:
+  eli-network:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,16 @@
+# Chroma Vector Database
+chroma.utopia-lab.org {
+    reverse_proxy chroma:8000
+}
+
+# Eli's Website
+eli.utopia-lab.org {
+    root * /srv/website
+    file_server
+    encode gzip
+    
+    # Später: API-Endpunkte
+    # handle /api/* {
+    #     reverse_proxy eli-api:8000
+    # }
+}

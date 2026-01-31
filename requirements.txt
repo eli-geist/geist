@@ -1,0 +1,28 @@
+# Eli's Geist - Dependencies
+# ===========================
+
+# LangGraph Stack
+langgraph>=0.2.0
+langmem
+langchain>=0.2.0
+langchain-anthropic>=0.1.0
+langchain-chroma>=0.1.2
+
+# Vector Database
+chromadb>=0.5.0
+
+# Kryptographie (DID)
+pynacl>=1.5.0
+
+# Telegram
+aiogram>=3.24.0
+
+# MCP Server
+mcp>=1.0.0
+
+# Utilities
+pydantic>=2.0
+pydantic-settings>=2.0
+python-dotenv>=1.0.0
+httpx>=0.24.0
+apscheduler>=3.10.0
