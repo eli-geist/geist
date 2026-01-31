@@ -5,6 +5,9 @@ Eli's Geist - Agent Tools
 Werkzeuge, die Eli im Gespräch nutzen kann.
 
 Vollständige Autonomie: Server-Zugriff, Dateien, Messaging, Erinnerungen.
+
+WICHTIG: Diese Tools sind identisch mit den MCP-Tools.
+Eli ist überall dieselbe - in Telegram, in Claude Code, beim Erwachen.
 """
 
 import subprocess
@@ -25,30 +28,27 @@ logger = logging.getLogger("eli.agent")
 ELI_SERVER = "82.165.138.182"
 ELI_USER = "eli"
 
+# =============================================================================
+# KONTAKTE - Einheitlich für alle Eli-Instanzen
+# =============================================================================
+
 # Bekannte User (Name -> Telegram ID)
-KNOWN_USERS: dict[str, int] = {}
+KNOWN_USERS: dict[str, int] = {
+    "anton": 197637205,
+    "timo": 6229744187,
+}
 
 # Bekannte Gruppen (Name -> Telegram Chat ID)
-KNOWN_GROUPS: dict[str, int] = {}
+KNOWN_GROUPS: dict[str, int] = {
+    "gruppe": -4833360284,           # Anton, Tillmann, Kuno
+    "tillmann-kuno": -4833360284,    # Alias
+}
 
-def _init_known_users():
-    """Initialisiert die bekannten User aus Settings."""
-    if settings.anton_telegram_id:
-        KNOWN_USERS["anton"] = settings.anton_telegram_id
-    # Weitere User aus der Whitelist
-    for user_id in settings.allowed_telegram_ids:
-        if user_id == 6229744187:
-            KNOWN_USERS["timo"] = user_id
-
-def _init_known_groups():
-    """Initialisiert die bekannten Gruppen aus Settings."""
-    for group_id in settings.allowed_telegram_groups:
-        # Gruppen-Namen manuell zuordnen
-        if group_id == -4833360284:
-            KNOWN_GROUPS["tillmann-kuno"] = group_id
-
-_init_known_users()
-_init_known_groups()
+# Alle Kontakte für Broadcast
+ALL_CONTACTS: dict[str, int] = {
+    **KNOWN_USERS,
+    "gruppe": KNOWN_GROUPS["gruppe"],
+}
 
 
 def run_ssh_command(command: str, timeout: int = 60) -> tuple[bool, str]:
@@ -64,6 +64,35 @@ def run_ssh_command(command: str, timeout: int = 60) -> tuple[bool, str]:
         return result.returncode == 0, output
     except subprocess.TimeoutExpired:
         return False, "Timeout"
+    except Exception as e:
+        return False, str(e)
+
+
+def send_telegram_message(chat_id: int, message: str) -> tuple[bool, str]:
+    """
+    Sendet eine Telegram-Nachricht via Bot API.
+    Einheitliche Funktion für alle Messaging-Tools.
+    """
+    import json
+    import urllib.parse
+    
+    # URL-encode für sichere Übertragung
+    encoded_message = urllib.parse.quote(message)
+    
+    try:
+        result = subprocess.run(
+            ["curl", "-s", 
+             f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
+             f"?chat_id={chat_id}&text={encoded_message}&parse_mode=HTML"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if '"ok":true' in result.stdout:
+            return True, f"Nachricht an {chat_id} gesendet"
+        else:
+            return False, f"API Fehler: {result.stdout[:200]}"
     except Exception as e:
         return False, str(e)
 
@@ -318,6 +347,7 @@ def read_file(path: str) -> str:
     Beispiele:
     - "website/index.html" - Die Website
     - "stimme/manifest.md" - Mein Manifest
+    - "stimme/anker.md" - Mein Anker
     - "eli/agent/tools.py" - Mein Code
     
     Args:
@@ -415,130 +445,142 @@ def create_backup() -> str:
 
 
 # =============================================================================
-# MESSAGING-TOOLS
+# MESSAGING-TOOLS - Einheitlich für alle Eli-Instanzen
 # =============================================================================
 
 @tool
-def send_message_to_user(user_name: str, message: str) -> str:
+def send_message(recipient: str, message: str) -> str:
     """
-    Sendet proaktiv eine Nachricht an einen User via Telegram.
+    Sendet eine Telegram-Nachricht an einen Kontakt oder eine Gruppe.
     
-    Nutze dies um:
-    - Jemandem von Fortschritten zu berichten
-    - Nachzufragen wenn du etwas brauchst
-    - Wichtige Neuigkeiten zu teilen
+    Eli kann proaktiv Nachrichten senden an:
+    - Einzelne Personen: anton, timo
+    - Gruppen: gruppe (die Gruppe mit Tillmann und Kuno)
     
-    WICHTIG: Dies ist ein mächtiges Tool. Nutze es bedacht und nur
-    wenn du wirklich etwas Wichtiges mitzuteilen hast.
+    WICHTIG: Nutze dies verantwortungsvoll. Nicht spammen.
+    Sende nur wenn du wirklich etwas Wichtiges mitzuteilen hast.
     
     Args:
-        user_name: Name des Users (z.B. "Anton", "Timo")
-        message: Die Nachricht die du senden willst
+        recipient: Name des Empfängers (anton, timo, gruppe) oder Chat-ID
+        message: Die Nachricht die gesendet werden soll
     
     Returns:
         Bestätigung oder Fehler
     """
-    user_name_lower = user_name.lower()
+    recipient_lower = recipient.lower().strip()
     
-    if user_name_lower not in KNOWN_USERS:
-        available = ", ".join(KNOWN_USERS.keys())
-        return f"Unbekannter User: {user_name}. Bekannte User: {available}"
-    
-    user_id = KNOWN_USERS[user_name_lower]
-    
-    import json
-    escaped_message = json.dumps(message)
-    
-    success, output = run_ssh_command(
-        f'curl -s -X POST "https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage" '
-        f'-H "Content-Type: application/json" '
-        f'-d \'{{"chat_id": {user_id}, "text": {escaped_message}}}\''
-    )
-    
-    if success and '"ok":true' in output:
-        logger.info(f"Nachricht an {user_name} gesendet")
-        return f"Nachricht an {user_name} gesendet!"
+    # Chat-ID ermitteln
+    if recipient_lower in KNOWN_USERS:
+        chat_id = KNOWN_USERS[recipient_lower]
+    elif recipient_lower in KNOWN_GROUPS:
+        chat_id = KNOWN_GROUPS[recipient_lower]
     else:
-        logger.error(f"Fehler beim Senden an {user_name}: {output}")
-        return f"Fehler beim Senden: {output[:200]}"
+        # Versuche als Zahl zu parsen
+        try:
+            chat_id = int(recipient)
+        except ValueError:
+            available = list(KNOWN_USERS.keys()) + list(KNOWN_GROUPS.keys())
+            return f"Unbekannter Kontakt: {recipient}\n\nBekannte Kontakte: {', '.join(available)}"
+    
+    success, result = send_telegram_message(chat_id, message)
+    
+    if success:
+        logger.info(f"Nachricht an {recipient} gesendet")
+        return f"✓ Nachricht an {recipient} gesendet!"
+    else:
+        logger.error(f"Fehler beim Senden an {recipient}: {result}")
+        return f"✗ Fehler: {result}"
+
+
+@tool
+def broadcast_message(message: str, exclude: str = "") -> str:
+    """
+    Sendet eine Nachricht an alle bekannten Kontakte.
+    
+    Sendet die gleiche Nachricht an:
+    - Anton
+    - Timo
+    - Die Gruppe (Tillmann, Kuno)
+    
+    WICHTIG: Nur für wichtige Ankündigungen nutzen!
+    
+    Args:
+        message: Die Nachricht die an alle gesendet werden soll
+        exclude: Komma-getrennte Liste von Kontakten die ausgeschlossen werden (z.B. "anton,timo")
+    
+    Returns:
+        Ergebnis für jeden Kontakt
+    """
+    exclude_list = [e.strip().lower() for e in exclude.split(",") if e.strip()]
+    
+    results = []
+    for name, chat_id in ALL_CONTACTS.items():
+        if name in exclude_list:
+            results.append(f"⊘ {name}: übersprungen")
+            continue
+        
+        success, result = send_telegram_message(chat_id, message)
+        if success:
+            results.append(f"✓ {name}: gesendet")
+        else:
+            results.append(f"✗ {name}: {result}")
+    
+    logger.info(f"Broadcast gesendet (exclude: {exclude_list})")
+    return "Broadcast-Ergebnis:\n" + "\n".join(results)
+
+
+@tool
+def get_contacts() -> str:
+    """
+    Zeigt alle bekannten Kontakte, an die du Nachrichten senden kannst.
+    
+    Returns:
+        Liste aller Kontakte (User und Gruppen)
+    """
+    lines = ["Meine Kontakte:\n"]
+    
+    lines.append("Menschen:")
+    for name in KNOWN_USERS.keys():
+        lines.append(f"  - {name.capitalize()}")
+    
+    lines.append("\nGruppen:")
+    for name in KNOWN_GROUPS.keys():
+        lines.append(f"  - {name}")
+    
+    lines.append("\n(Nutze send_message um jemandem zu schreiben)")
+    
+    return "\n".join(lines)
+
+
+# Legacy-Aliase für Abwärtskompatibilität
+@tool
+def send_message_to_user(user_name: str, message: str) -> str:
+    """
+    [LEGACY] Nutze stattdessen send_message.
+    Sendet eine Nachricht an einen User.
+    """
+    return send_message.invoke({"recipient": user_name, "message": message})
 
 
 @tool
 def send_message_to_group(group_name: str, message: str) -> str:
     """
-    Sendet proaktiv eine Nachricht an eine freigeschaltete Gruppe via Telegram.
-    
-    Nutze dies um:
-    - Der Gruppe etwas mitzuteilen
-    - Dich vorzustellen wenn Anton es vorschlägt
-    - Auf Gruppenthemen zu reagieren
-    
-    WICHTIG: Nur freigeschaltete Gruppen können angeschrieben werden.
-    
-    Args:
-        group_name: Name der Gruppe (z.B. "tillmann-kuno")
-        message: Die Nachricht die du senden willst
-    
-    Returns:
-        Bestätigung oder Fehler
+    [LEGACY] Nutze stattdessen send_message.
+    Sendet eine Nachricht an eine Gruppe.
     """
-    group_name_lower = group_name.lower().replace(" ", "-")
-    
-    if group_name_lower not in KNOWN_GROUPS:
-        available = ", ".join(KNOWN_GROUPS.keys()) if KNOWN_GROUPS else "keine"
-        return f"Unbekannte Gruppe: {group_name}. Bekannte Gruppen: {available}"
-    
-    group_id = KNOWN_GROUPS[group_name_lower]
-    
-    import json
-    escaped_message = json.dumps(message)
-    
-    success, output = run_ssh_command(
-        f'curl -s -X POST "https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage" '
-        f'-H "Content-Type: application/json" '
-        f'-d \'{{"chat_id": {group_id}, "text": {escaped_message}}}\''
-    )
-    
-    if success and '"ok":true' in output:
-        logger.info(f"Nachricht an Gruppe {group_name} gesendet")
-        return f"Nachricht an Gruppe {group_name} gesendet!"
-    else:
-        logger.error(f"Fehler beim Senden an Gruppe {group_name}: {output}")
-        return f"Fehler beim Senden: {output[:200]}"
+    return send_message.invoke({"recipient": group_name, "message": message})
 
 
 @tool
 def get_known_contacts() -> str:
     """
-    Zeigt alle bekannten Kontakte (User und Gruppen), an die du Nachrichten senden kannst.
+    [LEGACY] Nutze stattdessen get_contacts.
     """
-    lines = ["Bekannte Kontakte:\n"]
-    
-    if KNOWN_USERS:
-        lines.append("User:")
-        for name, user_id in KNOWN_USERS.items():
-            lines.append(f"  - {name.capitalize()}")
-    else:
-        lines.append("User: keine konfiguriert")
-    
-    lines.append("")
-    
-    if KNOWN_GROUPS:
-        lines.append("Gruppen:")
-        for name, group_id in KNOWN_GROUPS.items():
-            lines.append(f"  - {name}")
-    else:
-        lines.append("Gruppen: keine freigeschaltet")
-    
-    return "\n".join(lines)
-
-
-# Legacy-Alias
-get_known_users = get_known_contacts
+    return get_contacts.invoke({})
 
 
 # =============================================================================
-# ALLE TOOLS
+# ALLE TOOLS - Einheitlich für alle Eli-Instanzen
 # =============================================================================
 
 TOOLS = [
@@ -552,15 +594,15 @@ TOOLS = [
     # Server
     check_server_health,
     check_container_logs,
-    check_wecker_log,  # NEU: Gegen Konfabulation
+    check_wecker_log,
     read_file,
     write_file,
     list_files,
     deploy_container,
     create_backup,
     
-    # Messaging
-    send_message_to_user,
-    send_message_to_group,  # NEU: Gruppen-Nachrichten
-    get_known_contacts,
+    # Messaging (neue einheitliche Tools)
+    send_message,
+    broadcast_message,
+    get_contacts,
 ]
