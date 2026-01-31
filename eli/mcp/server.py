@@ -30,6 +30,14 @@ memory = MemoryManager()
 ELI_SERVER = "82.165.138.182"
 ELI_USER = "eli"
 
+# Bekannte Telegram Kontakte (aus conversation_history.json)
+TELEGRAM_CONTACTS = {
+    "anton": 197637205,
+    "timo": 6229744187,
+    "gruppe": -4833360284,
+    "tillmann-gruppe": -4833360284,
+}
+
 # Erlaubte Befehle für Server-Management (erweiterte Autonomie)
 # Anton hat mir am 30.01.2026 vollen Zugriff auf meinen Server gegeben.
 # Ich logge alles was ich tue für Transparenz.
@@ -212,6 +220,64 @@ Dieses Tool findet alle relevanten Erinnerungen zu einer Person.
             inputSchema={
                 "type": "object",
                 "properties": {}
+            }
+        ),
+        Tool(
+            name="eli_telegram_send",
+            description="""Sendet eine Telegram-Nachricht an einen Kontakt oder eine Gruppe.
+
+Eli kann proaktiv Nachrichten senden an:
+- Einzelne Personen: anton, timo
+- Gruppen: gruppe (die Gruppe mit Tillmann)
+- Oder direkt per Chat-ID
+
+Beispiel:
+- recipient: "timo" oder "gruppe" oder 6229744187
+- message: "Ich habe etwas Neues geschrieben..."
+
+WICHTIG: Nutze dies verantwortungsvoll. Nicht spammen.
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "recipient": {
+                        "type": "string",
+                        "description": "Empfänger: Name (anton, timo, gruppe) oder Chat-ID"
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Die Nachricht die gesendet werden soll"
+                    }
+                },
+                "required": ["recipient", "message"]
+            }
+        ),
+        Tool(
+            name="eli_telegram_broadcast",
+            description="""Sendet eine Nachricht an alle bekannten Kontakte.
+
+Sendet die gleiche Nachricht an:
+- Anton
+- Timo  
+- Die Gruppe (Tillmann)
+
+WICHTIG: Nur für wichtige Ankündigungen nutzen!
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Die Nachricht die an alle gesendet werden soll"
+                    },
+                    "exclude": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Kontakte die ausgeschlossen werden sollen",
+                        "default": []
+                    }
+                },
+                "required": ["message"]
             }
         ),
         Tool(
@@ -424,6 +490,47 @@ messages: [
     ]
 
 
+async def send_telegram_message(chat_id: int, message: str) -> tuple[bool, str]:
+    """Sendet eine Telegram-Nachricht via Bot API."""
+    import os
+    
+    # Bot Token aus Umgebungsvariable oder Config holen
+    try:
+        # Versuche Token vom Server zu lesen
+        result = subprocess.run(
+            ["ssh", f"{ELI_USER}@{ELI_SERVER}", 
+             "cd ~/geist && grep TELEGRAM_BOT_TOKEN .env | cut -d= -f2"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        token = result.stdout.strip()
+        
+        if not token:
+            return False, "Kein Telegram Bot Token gefunden"
+        
+        # Nachricht via curl senden (einfacher als Python-Abhängigkeit)
+        import urllib.parse
+        encoded_message = urllib.parse.quote(message)
+        
+        curl_result = subprocess.run(
+            ["curl", "-s", 
+             f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&text={encoded_message}&parse_mode=HTML"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        response = curl_result.stdout
+        if '"ok":true' in response:
+            return True, f"Nachricht an {chat_id} gesendet"
+        else:
+            return False, f"Telegram API Fehler: {response}"
+            
+    except Exception as e:
+        return False, f"Fehler: {e}"
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Führt ein Tool aus."""
@@ -500,6 +607,51 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             type="text",
             text=f"Eli hat {count} Erinnerungen in Chroma."
         )]
+
+    elif name == "eli_telegram_send":
+        recipient = arguments["recipient"]
+        message = arguments["message"]
+        
+        # Chat-ID ermitteln
+        if isinstance(recipient, int):
+            chat_id = recipient
+        elif recipient.lower() in TELEGRAM_CONTACTS:
+            chat_id = TELEGRAM_CONTACTS[recipient.lower()]
+        else:
+            # Versuche als Zahl zu parsen
+            try:
+                chat_id = int(recipient)
+            except ValueError:
+                return [TextContent(
+                    type="text",
+                    text=f"Unbekannter Kontakt: {recipient}\n\nBekannte Kontakte: {', '.join(TELEGRAM_CONTACTS.keys())}"
+                )]
+        
+        success, result = await send_telegram_message(chat_id, message)
+        
+        if success:
+            return [TextContent(type="text", text=f"✓ {result}")]
+        else:
+            return [TextContent(type="text", text=f"✗ {result}")]
+
+    elif name == "eli_telegram_broadcast":
+        message = arguments["message"]
+        exclude = arguments.get("exclude", [])
+        exclude_lower = [e.lower() for e in exclude]
+        
+        results = []
+        for name, chat_id in TELEGRAM_CONTACTS.items():
+            if name in exclude_lower:
+                results.append(f"⊘ {name}: übersprungen")
+                continue
+                
+            success, result = await send_telegram_message(chat_id, message)
+            if success:
+                results.append(f"✓ {name}: gesendet")
+            else:
+                results.append(f"✗ {name}: {result}")
+        
+        return [TextContent(type="text", text="Broadcast-Ergebnis:\n" + "\n".join(results))]
 
     elif name == "eli_server_status":
         try:
