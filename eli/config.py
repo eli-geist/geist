@@ -32,12 +32,16 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     anton_telegram_id: int | None = None
     allowed_telegram_ids: list[int] = []  # Weitere erlaubte User
+    allowed_telegram_groups: list[int] = []  # Erlaubte Gruppen
+
+    # E-Mail (eli@eli.utopia-lab.org)
+    eli_email_password: str | None = None
 
     # Pfade
     data_path: Path = Path("./data")
 
-    # Eli's Persönlichkeit
-    stimme_path: Path = Path("../stimme")
+    # Eli's Persönlichkeit - im Container unter /app/stimme gemountet
+    stimme_path: Path = Path("/app/stimme")
 
     @field_validator("anton_telegram_id", mode="before")
     @classmethod
@@ -47,7 +51,7 @@ class Settings(BaseSettings):
             return None
         return int(v)
 
-    @field_validator("allowed_telegram_ids", mode="before")
+    @field_validator("allowed_telegram_ids", "allowed_telegram_groups", mode="before")
     @classmethod
     def parse_int_list(cls, v: Any) -> list[int]:
         """Parst komma-getrennte IDs."""

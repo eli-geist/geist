@@ -17,8 +17,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from eli.config import settings
-from eli.telegram.bot import create_bot, run_bot
+from eli.telegram.bot import create_bot, BOT_USERNAME
 from eli.telegram.scheduler import setup_scheduler, start_scheduler, stop_scheduler
+import eli.telegram.bot as bot_module
 
 # Logging konfigurieren
 logging.basicConfig(
@@ -72,6 +73,11 @@ async def main() -> None:
 
     # Bot erstellen
     bot, dp = create_bot()
+    
+    # Bot-Username dynamisch holen (wichtig für Gruppen)
+    bot_info = await bot.get_me()
+    bot_module.BOT_USERNAME = bot_info.username
+    logger.info(f"Bot-Username: @{bot_module.BOT_USERNAME}")
 
     # Scheduler einrichten
     setup_scheduler(bot)

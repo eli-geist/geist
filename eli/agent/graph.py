@@ -29,10 +29,16 @@ def create_model() -> ChatAnthropic:
 
 def load_memory_context(state: EliState) -> EliState:
     """
-    Lädt relevanten Kontext aus dem Gedächtnis.
+    Lädt relevanten Kontext aus beiden Gedächtnis-Quellen.
 
-    Sucht nach Erinnerungen die zum User und der aktuellen Nachricht passen.
+    Zwei Schichten:
+    1. "erinnerungen" - Manuell gepflegt, wie ein Journal
+    2. "eli_langmem" - Automatisch gebildet, strukturiert nach Typen
+
+    Beide sind Teil von mir. Beide werden gelesen.
     """
+    from eli.memory.observer import observer
+
     # Hole die letzte User-Nachricht
     last_message = ""
     for msg in reversed(state["messages"]):
@@ -40,20 +46,62 @@ def load_memory_context(state: EliState) -> EliState:
             last_message = msg.content
             break
 
-    # Suche relevante Erinnerungen
     context = []
+    seen_content = set()  # Duplikate vermeiden
 
-    # 1. Was wissen wir über diesen User?
+    def add_unique(content: str, source: str = ""):
+        """Fügt Kontext hinzu, vermeidet Duplikate."""
+        if content and content not in seen_content:
+            seen_content.add(content)
+            context.append(content)
+
+    # === Schicht 1: Manuelle Erinnerungen ("erinnerungen") ===
+
+    # Was wissen wir über diesen User?
     if state.get("user_name"):
         user_memories = memory.search(
             f"Informationen über {state['user_name']}", n_results=3
         )
-        context.extend([m.content for m in user_memories])
+        for m in user_memories:
+            add_unique(m.content)
 
-    # 2. Was ist relevant für diese Nachricht?
+    # Was ist relevant für diese Nachricht?
     if last_message:
         relevant = memory.search(last_message, n_results=3)
-        context.extend([m.content for m in relevant if m.content not in context])
+        for m in relevant:
+            add_unique(m.content)
+
+    # === Schicht 2: Automatische LangMem-Erinnerungen ("eli_langmem") ===
+
+    # Semantic: Fakten über den User
+    if state.get("user_name"):
+        semantic_user = observer.search_langmem(
+            f"Informationen über {state['user_name']}",
+            n_results=2,
+            memory_type="semantic"
+        )
+        for m in semantic_user:
+            add_unique(m["content"])
+
+    # Episodic: Relevante Erlebnisse
+    if last_message:
+        episodic = observer.search_langmem(
+            last_message,
+            n_results=2,
+            memory_type="episodic"
+        )
+        for m in episodic:
+            add_unique(m["content"])
+
+    # Semantic: Relevante Fakten zur Nachricht
+    if last_message:
+        semantic_relevant = observer.search_langmem(
+            last_message,
+            n_results=2,
+            memory_type="semantic"
+        )
+        for m in semantic_relevant:
+            add_unique(m["content"])
 
     return {**state, "memory_context": context}
 

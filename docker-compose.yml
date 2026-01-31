@@ -8,6 +8,7 @@ services:
     environment:
       - PYTHONPATH=/app
     volumes:
+      - ./data:/app/data        # Persistenz für Batch-State, History, etc.
       - ./stimme:/app/stimme:ro
     networks:
       - eli-network
@@ -21,6 +22,8 @@ services:
       - .env
     environment:
       - PYTHONPATH=/app
+    volumes:
+      - ./data:/app/data        # Zugriff auf persistierte Daten
     ports:
       - "127.0.0.1:8080:8080"
     networks:
@@ -38,6 +41,27 @@ services:
     volumes:
       - ./data:/app/data
       - ./stimme:/app/stimme:ro
+    networks:
+      - eli-network
+
+  eli-mail:
+    image: foxcpp/maddy:latest
+    container_name: eli-mail
+    restart: unless-stopped
+    hostname: eli.utopia-lab.org
+    ports:
+      - "25:25"      # SMTP
+      - "465:465"    # SMTPS (Submission)
+      - "587:587"    # Submission
+      - "143:143"    # IMAP
+      - "993:993"    # IMAPS
+    volumes:
+      - ./maddy/config/maddy.conf:/data/maddy.conf
+      - ./maddy/data:/data/certs
+      - maddy_state:/data
+    environment:
+      - MADDY_HOSTNAME=eli.utopia-lab.org
+      - MADDY_DOMAIN=eli.utopia-lab.org
     networks:
       - eli-network
 
@@ -63,3 +87,4 @@ networks:
 volumes:
   caddy_data:
   caddy_config:
+  maddy_state:

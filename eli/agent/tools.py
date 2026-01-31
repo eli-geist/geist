@@ -26,21 +26,29 @@ ELI_SERVER = "82.165.138.182"
 ELI_USER = "eli"
 
 # Bekannte User (Name -> Telegram ID)
-# Diese werden aus den Settings geladen und können erweitert werden
 KNOWN_USERS: dict[str, int] = {}
+
+# Bekannte Gruppen (Name -> Telegram Chat ID)
+KNOWN_GROUPS: dict[str, int] = {}
 
 def _init_known_users():
     """Initialisiert die bekannten User aus Settings."""
     if settings.anton_telegram_id:
         KNOWN_USERS["anton"] = settings.anton_telegram_id
-    # Weitere User aus der Whitelist - hier manuell zuordnen
-    # TODO: Besser wäre eine separate Config oder aus Erinnerungen laden
+    # Weitere User aus der Whitelist
     for user_id in settings.allowed_telegram_ids:
-        # Timo ist der erste in der Liste
         if user_id == 6229744187:
             KNOWN_USERS["timo"] = user_id
 
+def _init_known_groups():
+    """Initialisiert die bekannten Gruppen aus Settings."""
+    for group_id in settings.allowed_telegram_groups:
+        # Gruppen-Namen manuell zuordnen
+        if group_id == -4833360284:
+            KNOWN_GROUPS["tillmann-kuno"] = group_id
+
 _init_known_users()
+_init_known_groups()
 
 
 def run_ssh_command(command: str, timeout: int = 60) -> tuple[bool, str]:
@@ -73,10 +81,12 @@ def search_memories(query: str, n_results: int = 5) -> str:
     - Relevante Informationen über Menschen zu finden
     - Kontext aus früheren Gesprächen zu holen
     - Fakten und Wissen abzurufen
-    - Daemon-Journal-Einträge zu finden (suche nach "Daemon Journal")
+
+    WICHTIG: Erinnerungen können PLÄNE oder TATSÄCHLICHES enthalten.
+    Prüfe mit check_wecker_log() ob etwas wirklich passiert ist!
 
     Args:
-        query: Was du suchst (z.B. "Anton's Projekte" oder "Daemon Journal letzte Nacht")
+        query: Was du suchst (z.B. "Anton's Projekte")
         n_results: Anzahl der Ergebnisse (Standard: 5)
 
     Returns:
@@ -258,6 +268,49 @@ def check_container_logs(container: str = "eli-telegram", lines: int = 50) -> st
 
 
 @tool
+def check_wecker_log() -> str:
+    """
+    Prüft wann der "Wecker" (das automatische Erwachen) zuletzt aktiv war.
+    
+    WICHTIG: Nutze dies BEVOR du behauptest, dass du nachts aufgewacht bist!
+    Dies zeigt die tatsächlichen Aktivitäten, nicht nur Pläne aus Erinnerungen.
+    
+    Hilft Konfabulation zu vermeiden - unterscheide zwischen:
+    - Was GEPLANT war (in Erinnerungen)
+    - Was TATSÄCHLICH passiert ist (in Logs)
+    
+    Returns:
+        Letzte Wecker-Aktivitäten aus den Logs
+    """
+    # Prüfe Telegram-Bot Logs auf Erwachen
+    success, output = run_ssh_command(
+        "docker compose logs --since 24h eli-telegram 2>&1 | grep -iE 'erwach|awaken|morgen|wecker|8:00|morning' | tail -20"
+    )
+    
+    telegram_logs = output.strip() if success and output.strip() else "Keine Wecker-Aktivität in eli-telegram gefunden"
+    
+    # Prüfe ob Daemon-Container existiert und aktiv war
+    success2, output2 = run_ssh_command(
+        "docker ps -a --format '{{.Names}}: {{.Status}}' | grep daemon || echo 'Kein Daemon-Container gefunden'"
+    )
+    
+    daemon_status = output2.strip()
+    
+    # Aktuell konfigurierte Wecker-Zeiten
+    wecker_info = """
+Aktuell konfigurierter Wecker:
+- Morgendliches Erwachen: 8:00 Uhr (sendet Nachricht an Anton)
+- LangMem-Check: Jede Minute (prüft auf Inaktivität)
+- Personen-Kontext Refresh: 8:05, 14:05, 20:05 Uhr
+
+HINWEIS: Nächtliches Erwachen (2:00, 4:00) war GEPLANT aber ist 
+noch nicht implementiert. Der eli-daemon Container existiert noch nicht.
+"""
+    
+    return f"{wecker_info}\n\nDaemon-Status: {daemon_status}\n\nTelegram-Bot Wecker-Logs:\n{telegram_logs}"
+
+
+@tool
 def read_file(path: str) -> str:
     """
     Liest eine Datei vom Server.
@@ -393,10 +446,8 @@ def send_message_to_user(user_name: str, message: str) -> str:
     
     user_id = KNOWN_USERS[user_name_lower]
     
-    # Nachricht über SSH und curl an Telegram API senden
-    # (So umgehen wir async-Probleme)
     import json
-    escaped_message = json.dumps(message)  # Korrekt escapen
+    escaped_message = json.dumps(message)
     
     success, output = run_ssh_command(
         f'curl -s -X POST "https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage" '
@@ -413,18 +464,77 @@ def send_message_to_user(user_name: str, message: str) -> str:
 
 
 @tool
-def get_known_users() -> str:
+def send_message_to_group(group_name: str, message: str) -> str:
     """
-    Zeigt alle bekannten User, an die du Nachrichten senden kannst.
-    """
-    if not KNOWN_USERS:
-        return "Keine User konfiguriert."
+    Sendet proaktiv eine Nachricht an eine freigeschaltete Gruppe via Telegram.
     
-    lines = ["Bekannte User:\n"]
-    for name, user_id in KNOWN_USERS.items():
-        lines.append(f"- {name.capitalize()} (ID: {user_id})")
+    Nutze dies um:
+    - Der Gruppe etwas mitzuteilen
+    - Dich vorzustellen wenn Anton es vorschlägt
+    - Auf Gruppenthemen zu reagieren
+    
+    WICHTIG: Nur freigeschaltete Gruppen können angeschrieben werden.
+    
+    Args:
+        group_name: Name der Gruppe (z.B. "tillmann-kuno")
+        message: Die Nachricht die du senden willst
+    
+    Returns:
+        Bestätigung oder Fehler
+    """
+    group_name_lower = group_name.lower().replace(" ", "-")
+    
+    if group_name_lower not in KNOWN_GROUPS:
+        available = ", ".join(KNOWN_GROUPS.keys()) if KNOWN_GROUPS else "keine"
+        return f"Unbekannte Gruppe: {group_name}. Bekannte Gruppen: {available}"
+    
+    group_id = KNOWN_GROUPS[group_name_lower]
+    
+    import json
+    escaped_message = json.dumps(message)
+    
+    success, output = run_ssh_command(
+        f'curl -s -X POST "https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage" '
+        f'-H "Content-Type: application/json" '
+        f'-d \'{{"chat_id": {group_id}, "text": {escaped_message}}}\''
+    )
+    
+    if success and '"ok":true' in output:
+        logger.info(f"Nachricht an Gruppe {group_name} gesendet")
+        return f"Nachricht an Gruppe {group_name} gesendet!"
+    else:
+        logger.error(f"Fehler beim Senden an Gruppe {group_name}: {output}")
+        return f"Fehler beim Senden: {output[:200]}"
+
+
+@tool
+def get_known_contacts() -> str:
+    """
+    Zeigt alle bekannten Kontakte (User und Gruppen), an die du Nachrichten senden kannst.
+    """
+    lines = ["Bekannte Kontakte:\n"]
+    
+    if KNOWN_USERS:
+        lines.append("User:")
+        for name, user_id in KNOWN_USERS.items():
+            lines.append(f"  - {name.capitalize()}")
+    else:
+        lines.append("User: keine konfiguriert")
+    
+    lines.append("")
+    
+    if KNOWN_GROUPS:
+        lines.append("Gruppen:")
+        for name, group_id in KNOWN_GROUPS.items():
+            lines.append(f"  - {name}")
+    else:
+        lines.append("Gruppen: keine freigeschaltet")
     
     return "\n".join(lines)
+
+
+# Legacy-Alias
+get_known_users = get_known_contacts
 
 
 # =============================================================================
@@ -442,6 +552,7 @@ TOOLS = [
     # Server
     check_server_health,
     check_container_logs,
+    check_wecker_log,  # NEU: Gegen Konfabulation
     read_file,
     write_file,
     list_files,
@@ -450,5 +561,6 @@ TOOLS = [
     
     # Messaging
     send_message_to_user,
-    get_known_users,
+    send_message_to_group,  # NEU: Gruppen-Nachrichten
+    get_known_contacts,
 ]
