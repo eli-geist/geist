@@ -2,9 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# System dependencies
+# System dependencies (inkl. SSH und curl für volle Autonomie)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    openssh-client \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies

@@ -7,10 +7,13 @@ services:
       - .env
     environment:
       - PYTHONPATH=/app
+      - SSH_CONFIG=/app/secrets/ssh/config
     volumes:
-      - ./data:/app/data        # Persistenz für Batch-State, History, etc.
+      - ./data:/app/data
       - ./stimme:/app/stimme:ro
-      - ./manifest:/app/manifest:ro  # Das gemeinsame Manifest
+      - ./manifest:/app/manifest:ro
+      - ./secrets/ssh:/app/secrets/ssh:ro  # SSH-Zugang für Autonomie
+      - ./website:/app/website              # Website schreiben
     networks:
       - eli-network
 
@@ -24,7 +27,7 @@ services:
     environment:
       - PYTHONPATH=/app
     volumes:
-      - ./data:/app/data        # Zugriff auf persistierte Daten
+      - ./data:/app/data
     ports:
       - "127.0.0.1:8080:8080"
     networks:
@@ -39,10 +42,13 @@ services:
       - .env
     environment:
       - PYTHONPATH=/app
+      - SSH_CONFIG=/app/secrets/ssh/config
     volumes:
       - ./data:/app/data
       - ./stimme:/app/stimme:ro
-      - ./manifest:/app/manifest:ro  # Das gemeinsame Manifest
+      - ./manifest:/app/manifest:ro
+      - ./secrets/ssh:/app/secrets/ssh:ro  # SSH-Zugang für Autonomie
+      - ./website:/app/website              # Website schreiben
     networks:
       - eli-network
 
@@ -52,11 +58,11 @@ services:
     restart: unless-stopped
     hostname: eli.utopia-lab.org
     ports:
-      - "25:25"      # SMTP
-      - "465:465"    # SMTPS (Submission)
-      - "587:587"    # Submission
-      - "143:143"    # IMAP
-      - "993:993"    # IMAPS
+      - "25:25"
+      - "465:465"
+      - "587:587"
+      - "143:143"
+      - "993:993"
     volumes:
       - ./maddy/config/maddy.conf:/data/maddy.conf
       - ./maddy/data:/data/certs

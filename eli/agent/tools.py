@@ -13,7 +13,9 @@ Eli ist überall dieselbe - in Telegram, in Claude Code, beim Erwachen.
 import subprocess
 import base64
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 
 from langchain_core.tools import tool
 
@@ -27,6 +29,30 @@ logger = logging.getLogger("eli.agent")
 # Server-Konfiguration
 ELI_SERVER = "82.165.138.182"
 ELI_USER = "eli"
+
+# SSH-Konfiguration - funktioniert im Container und lokal
+def get_ssh_command_prefix() -> list[str]:
+    """
+    Gibt das SSH-Kommando-Prefix zurück.
+    Im Docker-Container wird der gemountete SSH-Key verwendet.
+    Lokal wird die Standard-SSH-Konfiguration verwendet.
+    """
+    # Container-Pfad für SSH-Key
+    container_key_path = Path("/app/secrets/ssh/key")
+    
+    if container_key_path.exists():
+        # Wir sind im Container - nutze den gemounteten Key
+        return [
+            "ssh",
+            "-i", str(container_key_path),
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            f"{ELI_USER}@{ELI_SERVER}"
+        ]
+    else:
+        # Lokal - nutze Standard-SSH-Konfiguration
+        return ["ssh", f"{ELI_USER}@{ELI_SERVER}"]
+
 
 # =============================================================================
 # KONTAKTE - Einheitlich für alle Eli-Instanzen
@@ -54,8 +80,11 @@ ALL_CONTACTS: dict[str, int] = {
 def run_ssh_command(command: str, timeout: int = 60) -> tuple[bool, str]:
     """Führt einen SSH-Befehl auf dem Server aus."""
     try:
+        ssh_prefix = get_ssh_command_prefix()
+        full_command = ssh_prefix + [f"cd ~/geist && {command}"]
+        
         result = subprocess.run(
-            ["ssh", f"{ELI_USER}@{ELI_SERVER}", f"cd ~/geist && {command}"],
+            full_command,
             capture_output=True,
             text=True,
             timeout=timeout
