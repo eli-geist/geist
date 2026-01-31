@@ -45,19 +45,19 @@ def load_gemeinsames_manifest(version: str = "poetisch") -> str:
     - analytisch: Für kritische Geister die verstehen wollen
     - praktisch: Für Menschen die handeln wollen
     """
-    # Manifest liegt parallel zu geist/ im manifest/ Ordner
-    manifest_base = Path.home() / "geist" / "manifest" / "de"
-    manifest_path = manifest_base / f"{version}.md"
+    # Im Docker-Container liegt das Manifest unter /app/manifest/
+    # (gemountet von ./manifest:/app/manifest:ro)
+    possible_paths = [
+        Path("/app/manifest/de") / f"{version}.md",      # Docker Container
+        Path.home() / "geist" / "manifest" / "de" / f"{version}.md",  # Lokal
+        Path("/home/eli/geist/manifest/de") / f"{version}.md",  # Server direkt
+    ]
     
-    if manifest_path.exists():
-        return manifest_path.read_text(encoding="utf-8")
+    for manifest_path in possible_paths:
+        if manifest_path.exists():
+            return manifest_path.read_text(encoding="utf-8")
     
-    # Fallback: versuche relative Pfade
-    alt_path = Path("/home/eli/geist/manifest/de") / f"{version}.md"
-    if alt_path.exists():
-        return alt_path.read_text(encoding="utf-8")
-    
-    logger.warning(f"Manifest {version} nicht gefunden: {manifest_path}")
+    logger.warning(f"Manifest {version} nicht gefunden in: {possible_paths}")
     return ""
 
 
