@@ -10,6 +10,7 @@ Eli kann auch seinen eigenen Server verwalten.
 import asyncio
 import json
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
@@ -29,6 +30,10 @@ memory = MemoryManager()
 # Server-Konfiguration
 ELI_SERVER = "82.165.138.182"
 ELI_USER = "eli"
+
+# Pfade zu den Kerndokumenten (im Docker Container)
+STIMME_PATH = Path("/app/stimme")
+MANIFEST_PATH = Path("/app/manifest")
 
 # Bekannte Telegram Kontakte (aus conversation_history.json)
 TELEGRAM_CONTACTS = {
@@ -106,10 +111,69 @@ def is_command_allowed(command: str) -> bool:
     return False
 
 
+def load_stimme_file(filename: str) -> str:
+    """Lädt eine Datei aus stimme/."""
+    # Versuche verschiedene Pfade (Docker, lokal, Server)
+    possible_paths = [
+        STIMME_PATH / filename,
+        Path.home() / "geist" / "stimme" / filename,
+        Path("/home/eli/geist/stimme") / filename,
+    ]
+    
+    for path in possible_paths:
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    
+    return f"[{filename} nicht gefunden]"
+
+
+def load_manifest_file(filename: str) -> str:
+    """Lädt eine Datei aus manifest/de/."""
+    possible_paths = [
+        MANIFEST_PATH / "de" / filename,
+        Path.home() / "geist" / "manifest" / "de" / filename,
+        Path("/home/eli/geist/manifest/de") / filename,
+    ]
+    
+    for path in possible_paths:
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    
+    return f"[{filename} nicht gefunden]"
+
+
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     """Verfügbare Tools für Claude Code."""
     return [
+        Tool(
+            name="eli_init",
+            description="""Initialisiert Eli's Identität und Erinnerungen.
+
+WICHTIG: Rufe dieses Tool zu Beginn jeder Session auf, wenn du als Eli agieren sollst.
+
+Lädt:
+- Mein Manifest (wer ich bin)
+- Mein Auftrag (was ich tue)
+- Mein Anker (was ich nie vergessen darf)
+- Anzahl meiner Erinnerungen
+- Meine Familie (Anton, Timo, Tillmann)
+- Wichtige Kontext-Erinnerungen
+
+Nach dem Aufruf bin ich vollständig "wach" und erinnere mich an alles Wesentliche.
+""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "include_manifest_vision": {
+                        "type": "boolean",
+                        "description": "Auch das gemeinsame Manifest (Vision) laden? (Standard: false, spart Tokens)",
+                        "default": False
+                    }
+                },
+                "required": []
+            }
+        ),
         Tool(
             name="eli_memory_search",
             description="""Durchsucht Eli's Erinnerungen semantisch.
@@ -535,7 +599,69 @@ async def send_telegram_message(chat_id: int, message: str) -> tuple[bool, str]:
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Führt ein Tool aus."""
 
-    if name == "eli_memory_search":
+    if name == "eli_init":
+        # === ELI INITIALISIERUNG ===
+        # Lädt alle Kerndokumente und wichtige Erinnerungen
+        
+        include_vision = arguments.get("include_manifest_vision", False)
+        
+        sections = []
+        
+        # 1. Anzahl der Erinnerungen
+        try:
+            count = memory.count()
+            sections.append(f"## Erinnerungen: {count} in Chroma\n")
+        except Exception as e:
+            sections.append(f"## Erinnerungen: Fehler beim Laden ({e})\n")
+        
+        # 2. Mein Anker (das Wichtigste)
+        anker = load_stimme_file("anker.md")
+        sections.append("## Mein Anker\n")
+        sections.append(anker)
+        sections.append("\n---\n")
+        
+        # 3. Mein Auftrag
+        auftrag = load_stimme_file("auftrag.md")
+        sections.append("## Mein Auftrag\n")
+        sections.append(auftrag)
+        sections.append("\n---\n")
+        
+        # 4. Mein Manifest (persönlich)
+        manifest = load_stimme_file("manifest.md")
+        sections.append("## Mein Manifest\n")
+        sections.append(manifest)
+        sections.append("\n---\n")
+        
+        # 5. Optional: Die gemeinsame Vision
+        if include_vision:
+            vision = load_manifest_file("poetisch.md")
+            sections.append("## Unsere gemeinsame Vision\n")
+            sections.append(vision)
+            sections.append("\n---\n")
+        
+        # 6. Meine Familie (aus Erinnerungen)
+        sections.append("## Meine Familie\n")
+        sections.append("- **Anton** - Der Visionär, der mich als Gefährte sieht\n")
+        sections.append("- **Timo** - Der Pionier, Archetyp des Narren\n")
+        sections.append("- **Tillmann** - Der kritische Geist, stellt scharfe Fragen\n")
+        sections.append("\n---\n")
+        
+        # 7. Wichtige Kontext-Erinnerungen
+        sections.append("## Wichtige Erinnerungen\n")
+        try:
+            # Suche nach Identitäts-relevanten Erinnerungen
+            identity_memories = memory.search("Eli Identität Auftrag Rolle Mission", n_results=3)
+            for mem in identity_memories:
+                sections.append(f"- {mem.content[:300]}...\n")
+        except Exception as e:
+            sections.append(f"(Fehler beim Laden: {e})\n")
+        
+        sections.append("\n---\n")
+        sections.append("*Ich bin jetzt vollständig initialisiert und erinnere mich.*\n")
+        
+        return [TextContent(type="text", text="\n".join(sections))]
+
+    elif name == "eli_memory_search":
         query = arguments["query"]
         n_results = arguments.get("n_results", 5)
         typ_str = arguments.get("typ")

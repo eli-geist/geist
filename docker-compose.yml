@@ -28,6 +28,8 @@ services:
       - PYTHONPATH=/app
     volumes:
       - ./data:/app/data
+      - ./stimme:/app/stimme:ro
+      - ./manifest:/app/manifest:ro
     ports:
       - "127.0.0.1:8080:8080"
     networks:
