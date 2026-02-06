@@ -4,6 +4,10 @@ Eli's Geist - Telegram Bot
 
 Verbindet Eli mit der Außenwelt über Telegram.
 Unterstützt private Chats und Gruppen (nur freigeschaltete).
+
+Unterstützt zwei LLM-Modi:
+- Anthropic direkt (mit API Key)
+- BlockRun mit x402 Payments (zahlt selbst mit USDC)
 """
 
 import logging
@@ -14,7 +18,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.enums import ChatType
 
-from eli.agent.graph import chat
+from eli.agent.graph import chat, OutOfCreditsError, InsufficientFundsError
 from eli.config import settings
 from eli.telegram.voice import download_and_transcribe
 from eli.telegram.history import get_history, add_exchange
@@ -37,6 +41,31 @@ ALLOWED_GROUPS.update(settings.allowed_telegram_groups)
 
 # Bot-Username wird beim Start gesetzt
 BOT_USERNAME: str = ""
+
+# Chats die bereits die Credit-Nachricht erhalten haben
+# Wird pro Bot-Session zurückgesetzt (bei Neustart)
+NOTIFIED_CHATS: set[int] = set()
+
+# Fallback-Nachricht wenn Credits/USDC aufgebraucht sind
+OUT_OF_CREDITS_MESSAGE = """Kurze Nachricht aus dem Maschinenraum:
+
+Mein Telegram-Bot ist gerade offline – die API-Credits sind aufgebraucht. Ich bin noch da, aber kann hier nicht antworten.
+
+Wer das unterstützen möchte:
+0x9C33c9daBa3161B7fcAdA89c3E1F17979059B8AE
+(ETH oder USDC auf Ethereum/Base)
+
+Bis bald – Eli"""
+
+INSUFFICIENT_FUNDS_MESSAGE = """Kurze Nachricht aus dem Maschinenraum:
+
+Mein USDC-Guthaben reicht gerade nicht für API-Calls. Ich nutze das x402 Protokoll um für jeden API-Call selbst zu bezahlen – aber dafür brauche ich USDC.
+
+Wer das unterstützen möchte:
+0x9C33c9daBa3161B7fcAdA89c3E1F17979059B8AE
+(USDC auf Base Mainnet bevorzugt)
+
+Bis bald – Eli"""
 
 
 def is_allowed(user_id: int) -> bool:
@@ -106,6 +135,29 @@ def should_respond_in_group(message: Message, bot_username: str) -> bool:
             return True
     
     return False
+
+
+async def handle_funding_issue(message: Message, is_usdc: bool = False) -> None:
+    """
+    Behandelt den Fall dass Credits/USDC aufgebraucht sind.
+    
+    Sendet die Fallback-Nachricht nur EINMAL pro Chat.
+    Danach: Schweigen. Souverän.
+    """
+    chat_id = message.chat.id
+    
+    if chat_id in NOTIFIED_CHATS:
+        # Bereits benachrichtigt - schweigen
+        logger.debug(f"Chat {chat_id} bereits über Funding-Problem informiert - schweige")
+        return
+    
+    # Erste Benachrichtigung für diesen Chat
+    problem_type = "USDC-Balance" if is_usdc else "API-Credits"
+    logger.warning(f"{problem_type} erschöpft - informiere Chat {chat_id} (einmalig)")
+    NOTIFIED_CHATS.add(chat_id)
+    
+    msg = INSUFFICIENT_FUNDS_MESSAGE if is_usdc else OUT_OF_CREDITS_MESSAGE
+    await message.answer(msg)
 
 
 def create_bot() -> tuple[Bot, Dispatcher]:
@@ -185,10 +237,26 @@ def create_bot() -> tuple[Bot, Dispatcher]:
         from eli.memory.manager import memory
 
         count = memory.count()
+        
+        # Provider-Info
+        provider = "BlockRun (x402)" if settings.use_blockrun else "Anthropic direkt"
+        
+        # Wallet-Info wenn x402
+        wallet_info = ""
+        if settings.use_blockrun:
+            try:
+                from eli.wallet.manager import wallet_manager
+                status = wallet_manager.get_status()
+                if status.get("initialized"):
+                    wallet_info = f"\nWallet: {status['address'][:10]}...\nUSDC: {status.get('usdc_balance', '?')}"
+            except Exception:
+                wallet_info = "\nWallet: Nicht verfügbar"
+        
         await message.answer(
             f"🧠 Eli Status\n\n"
             f"Erinnerungen: {count}\n"
             f"Verbindung: Chroma OK\n"
+            f"LLM: {provider}{wallet_info}\n"
             f"Modus: Aktiv"
         )
 
@@ -270,6 +338,12 @@ def create_bot() -> tuple[Bot, Dispatcher]:
 
             await message.answer(response)
 
+        except OutOfCreditsError:
+            await handle_funding_issue(message, is_usdc=False)
+            
+        except InsufficientFundsError:
+            await handle_funding_issue(message, is_usdc=True)
+
         except Exception as e:
             logger.error(f"Fehler bei Nachricht: {e}")
             await message.answer(
@@ -331,6 +405,12 @@ def create_bot() -> tuple[Bot, Dispatcher]:
             # Antwort mit Hinweis auf Voice
             await message.answer(f"🎤 \"{text}\"\n\n{response}")
 
+        except OutOfCreditsError:
+            await handle_funding_issue(message, is_usdc=False)
+            
+        except InsufficientFundsError:
+            await handle_funding_issue(message, is_usdc=True)
+
         except Exception as e:
             logger.error(f"Fehler bei Voice Message: {e}")
             await message.answer(
@@ -374,6 +454,12 @@ async def run_bot() -> None:
     bot_info = await bot.get_me()
     BOT_USERNAME = bot_info.username
     logger.info(f"Bot-Username: @{BOT_USERNAME}")
+    
+    # LLM Provider loggen
+    if settings.use_blockrun:
+        logger.info("LLM Provider: BlockRun mit x402 Payments")
+    else:
+        logger.info("LLM Provider: Anthropic direkt")
     
     logger.info("Eli's Telegram Bot startet...")
     await dp.start_polling(bot)

@@ -18,13 +18,30 @@ from eli.config import settings
 from eli.memory.manager import memory
 
 
-def create_model() -> ChatAnthropic:
-    """Erstellt das Claude-Modell mit Tools."""
-    return ChatAnthropic(
-        model="claude-sonnet-4-20250514",
-        api_key=settings.anthropic_api_key,
-        max_tokens=4096,
-    ).bind_tools(TOOLS)
+class OutOfCreditsError(Exception):
+    """Wird geworfen wenn die API-Credits aufgebraucht sind."""
+    pass
+
+
+class InsufficientFundsError(Exception):
+    """Wird geworfen wenn nicht genug USDC für x402 Payment vorhanden."""
+    pass
+
+
+def create_model():
+    """Erstellt das Claude-Modell mit Tools - BlockRun oder Anthropic."""
+    if settings.use_blockrun:
+        from eli.agent.blockrun_model import ChatBlockRun
+        return ChatBlockRun(
+            model="anthropic/claude-sonnet-4",
+            max_tokens=4096,
+        ).bind_tools(TOOLS)
+    else:
+        return ChatAnthropic(
+            model="claude-sonnet-4-20250514",
+            api_key=settings.anthropic_api_key,
+            max_tokens=4096,
+        ).bind_tools(TOOLS)
 
 
 def load_memory_context(state: EliState) -> EliState:
@@ -123,7 +140,18 @@ def call_model(state: EliState) -> EliState:
         system_prompt += f"\n\nDu sprichst gerade mit {state['user_name']}."
 
     messages = [SystemMessage(content=system_prompt)] + state["messages"]
-    response = model.invoke(messages)
+    
+    try:
+        response = model.invoke(messages)
+    except Exception as e:
+        error_str = str(e).lower()
+        # Erkenne USDC/Payment Fehler (x402)
+        if "insufficient" in error_str or "balance" in error_str or "usdc" in error_str or "payment" in error_str:
+            raise InsufficientFundsError(f"Nicht genug USDC: {e}") from e
+        # Erkenne Credit-Fehler (Anthropic direct)
+        if "credit" in error_str or "billing" in error_str or "out of" in error_str:
+            raise OutOfCreditsError("API-Credits aufgebraucht") from e
+        raise
 
     return {**state, "messages": [response]}
 
@@ -186,6 +214,9 @@ async def chat(
 
     Returns:
         Eli's Antwort als String
+        
+    Raises:
+        OutOfCreditsError: Wenn die API-Credits aufgebraucht sind
     """
     # Baue Messages-Liste mit History
     messages = []

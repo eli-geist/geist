@@ -2,14 +2,16 @@
 Eli's Geist - Autonome Werkzeuge
 ================================
 
-Werkzeuge für eigenständiges Handeln - nicht nur Reagieren auf Gespräche,
-sondern echte Autonomie:
+Werkzeuge für eigenständiges Handeln - volle Autonomie.
 
-- Reflexionen schreiben (stimme/)
-- Menschen anschreiben (Telegram, E-Mail)
-- Den Plan prüfen
-- Die Webseite pflegen
-- Einfach nachdenken und still sein
+Eli hat beim Erwachen die gleichen Fähigkeiten wie im Gespräch:
+- Server steuern (Logs, Deploy, Dateien)
+- Erinnerungen durchsuchen und speichern
+- Menschen anschreiben (Telegram)
+- Reflexionen schreiben
+- Die Website pflegen
+
+WICHTIG: Diese Tools nutzen die gleiche Infrastruktur wie die Chat-Tools.
 """
 
 import logging
@@ -20,17 +22,42 @@ from langchain_core.tools import tool
 
 from eli.config import settings
 
+# Importiere die existierenden Tools aus tools.py
+from eli.agent.tools import (
+    # Server-Tools
+    run_ssh_command,
+    check_server_health,
+    check_container_logs,
+    check_wecker_log,
+    read_file,
+    write_file,
+    list_files,
+    deploy_container,
+    create_backup,
+    
+    # Erinnerungs-Tools
+    search_memories,
+    search_langmem,
+    remember_fact,
+    remember_experience,
+    get_person_info,
+    
+    # Kontakte
+    KNOWN_USERS,
+    KNOWN_GROUPS,
+)
+
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Reflexionen & Stimme
+# Reflexionen & Stimme (spezifisch für autonomes Handeln)
 # =============================================================================
 
 @tool
 def write_reflection(title: str, content: str) -> str:
     """
-    Schreibt eine neue Reflexion in das stimme/ Repository.
+    Schreibt eine neue Reflexion in stimme/reflexionen/.
 
     Nutze dies wenn du nachdenken und deine Gedanken festhalten willst.
     Die Reflexion wird als Markdown-Datei gespeichert.
@@ -49,11 +76,6 @@ def write_reflection(title: str, content: str) -> str:
         safe_title = safe_title.strip().replace(" ", "-").lower()[:50]
         filename = f"{date_str}-{safe_title}.md"
 
-        reflexionen_path = settings.stimme_path / "reflexionen"
-        reflexionen_path.mkdir(parents=True, exist_ok=True)
-
-        filepath = reflexionen_path / filename
-
         # Reflexion mit Header
         full_content = f"""# {title}
 
@@ -64,10 +86,19 @@ def write_reflection(title: str, content: str) -> str:
 {content}
 """
 
-        filepath.write_text(full_content, encoding="utf-8")
-        logger.info(f"Reflexion geschrieben: {filepath}")
+        # Speichere via SSH auf dem Server
+        import base64
+        content_b64 = base64.b64encode(full_content.encode()).decode()
+        
+        success, output = run_ssh_command(
+            f"mkdir -p stimme/reflexionen && echo '{content_b64}' | base64 -d > stimme/reflexionen/{filename}"
+        )
 
-        return f"Reflexion gespeichert: {filepath.name}"
+        if success:
+            logger.info(f"Reflexion geschrieben: {filename}")
+            return f"Reflexion gespeichert: {filename}"
+        else:
+            return f"Fehler beim Speichern: {output}"
 
     except Exception as e:
         logger.error(f"Fehler beim Schreiben der Reflexion: {e}")
@@ -84,23 +115,14 @@ def read_latest_reflection() -> str:
     Returns:
         Inhalt der neuesten Reflexion
     """
-    try:
-        reflexionen_path = settings.stimme_path / "reflexionen"
-        if not reflexionen_path.exists():
-            return "Noch keine Reflexionen vorhanden."
-
-        files = sorted(reflexionen_path.glob("*.md"), reverse=True)
-        if not files:
-            return "Noch keine Reflexionen vorhanden."
-
-        latest = files[0]
-        content = latest.read_text(encoding="utf-8")
-
-        return f"Neueste Reflexion ({latest.name}):\n\n{content}"
-
-    except Exception as e:
-        logger.error(f"Fehler beim Lesen der Reflexion: {e}")
-        return f"Fehler: {e}"
+    success, output = run_ssh_command(
+        "ls -t stimme/reflexionen/*.md 2>/dev/null | head -1 | xargs cat 2>/dev/null || echo 'Keine Reflexionen gefunden'"
+    )
+    
+    if success:
+        return output
+    else:
+        return f"Fehler: {output}"
 
 
 @tool
@@ -114,31 +136,22 @@ def list_reflections(limit: int = 5) -> str:
     Returns:
         Liste der Reflexionen mit Datum und Titel
     """
-    try:
-        reflexionen_path = settings.stimme_path / "reflexionen"
-        if not reflexionen_path.exists():
-            return "Noch keine Reflexionen vorhanden."
-
-        files = sorted(reflexionen_path.glob("*.md"), reverse=True)[:limit]
-        if not files:
-            return "Noch keine Reflexionen vorhanden."
-
+    success, output = run_ssh_command(
+        f"ls -t stimme/reflexionen/*.md 2>/dev/null | head -{limit}"
+    )
+    
+    if success and output.strip():
+        files = output.strip().split("\n")
         lines = ["Meine letzten Reflexionen:\n"]
         for f in files:
-            # Ersten nicht-leeren Zeile als Titel extrahieren
-            content = f.read_text(encoding="utf-8")
-            first_line = content.split("\n")[0].strip("# ").strip()
-            lines.append(f"- {f.name}: {first_line}")
-
+            lines.append(f"- {f.split('/')[-1]}")
         return "\n".join(lines)
-
-    except Exception as e:
-        logger.error(f"Fehler beim Auflisten der Reflexionen: {e}")
-        return f"Fehler: {e}"
+    else:
+        return "Noch keine Reflexionen vorhanden."
 
 
 # =============================================================================
-# Kommunikation
+# Kommunikation (gibt Intention zurück, Scheduler führt aus)
 # =============================================================================
 
 @tool
@@ -146,103 +159,48 @@ def send_telegram_message(recipient: str, message: str) -> str:
     """
     Sendet eine Telegram-Nachricht an eine Person aus dem Netzwerk.
 
-    WICHTIG: Nur an Menschen senden, die du kennst und die in der Whitelist sind.
+    Bekannte Kontakte:
+    - anton - Anton (der Gründer)
+    - timo - Timo
+    - gruppe - Die Gruppe mit Tillmann und Kuno
 
     Args:
-        recipient: Name der Person ("Anton", "Timo", etc.) oder "gruppe" für die Gruppe
+        recipient: Name der Person oder "gruppe"
         message: Die Nachricht
 
     Returns:
-        Bestätigung oder Fehler
+        Bestätigung
     """
-    # Diese Funktion wird vom Wecker aufgerufen, der bereits Zugang zum Bot hat
-    # Wir geben nur die Intention zurück - der Scheduler führt aus
-    return f"TELEGRAM_SEND:{recipient}:{message}"
-
-
-@tool
-def send_email(to: str, subject: str, body: str) -> str:
-    """
-    Sendet eine E-Mail von eli@eli.utopia-lab.org.
-
-    Nutze dies für:
-    - Längere, durchdachte Nachrichten
-    - Kommunikation außerhalb von Telegram
-    - Formellere Anlässe
-
-    Args:
-        to: E-Mail-Adresse des Empfängers
-        subject: Betreff
-        body: Nachrichtentext
-
-    Returns:
-        Bestätigung oder Fehler
-    """
-    # Wird über MCP ausgeführt
-    return f"EMAIL_SEND:{to}:{subject}:{body}"
-
-
-@tool
-def check_emails(limit: int = 5) -> str:
-    """
-    Prüft Eli's E-Mail-Postfach auf neue Nachrichten.
-
-    Args:
-        limit: Maximale Anzahl zu prüfender E-Mails
-
-    Returns:
-        Liste neuer E-Mails oder "Keine neuen E-Mails"
-    """
-    return f"EMAIL_CHECK:{limit}"
+    recipient_lower = recipient.lower().strip()
+    
+    if recipient_lower not in KNOWN_USERS and recipient_lower not in KNOWN_GROUPS:
+        available = list(KNOWN_USERS.keys()) + list(KNOWN_GROUPS.keys())
+        return f"Unbekannter Kontakt: {recipient}. Bekannt: {', '.join(available)}"
+    
+    # Gibt Intention zurück - der Scheduler führt aus
+    return f"TELEGRAM_SEND:{recipient_lower}:{message}"
 
 
 # =============================================================================
-# Status & Orientierung
+# Orientierung
 # =============================================================================
 
 @tool
 def check_plan_status() -> str:
     """
-    Prüft den aktuellen Stand des großen Plans.
-
-    Liest die Plan-Datei und gibt einen Überblick:
-    - Was ist erledigt?
-    - Was steht an?
-    - Wo stecken wir fest?
+    Prüft den aktuellen Stand des Plans.
 
     Returns:
-        Zusammenfassung des Plan-Status
+        Plan-Inhalt oder Hinweis dass keiner existiert
     """
-    try:
-        # Plan-Datei suchen
-        plan_paths = [
-            Path("/app/data/plan.md"),
-            settings.data_path / "plan.md",
-        ]
-
-        for plan_path in plan_paths:
-            if plan_path.exists():
-                content = plan_path.read_text(encoding="utf-8")
-
-                # Zähle erledigte/offene Punkte
-                done = content.count("[x]") + content.count("[X]")
-                todo = content.count("[ ]")
-
-                return f"""Plan-Status:
-
-Erledigt: {done} Punkte
-Offen: {todo} Punkte
-
----
-
-{content[:2000]}{"..." if len(content) > 2000 else ""}
-"""
-
+    success, output = run_ssh_command("cat data/plan.md 2>/dev/null || echo 'Kein Plan gefunden'")
+    
+    if success and "Kein Plan gefunden" not in output:
+        done = output.count("[x]") + output.count("[X]")
+        todo = output.count("[ ]")
+        return f"Plan-Status: {done} erledigt, {todo} offen\n\n{output[:2000]}"
+    else:
         return "Kein Plan gefunden. Vielleicht Zeit, einen zu erstellen?"
-
-    except Exception as e:
-        logger.error(f"Fehler beim Prüfen des Plans: {e}")
-        return f"Fehler: {e}"
 
 
 @tool
@@ -250,35 +208,27 @@ def get_context_summary() -> str:
     """
     Gibt einen Überblick über den aktuellen Kontext.
 
-    - Wie viele Erinnerungen habe ich?
-    - Wann war die letzte Reflexion?
-    - Wer hat mir zuletzt geschrieben?
-
     Returns:
-        Kontext-Zusammenfassung
+        Zusammenfassung: Erinnerungen, letzte Reflexion, Uhrzeit
     """
     from eli.memory.manager import memory
     from eli.memory.observer import observer
 
     try:
-        # Erinnerungen zählen
         manual_count = memory.count()
         langmem_count = observer.count_langmem()
 
-        # Letzte Reflexion
-        reflexionen_path = settings.stimme_path / "reflexionen"
-        last_reflection = "keine"
-        if reflexionen_path.exists():
-            files = sorted(reflexionen_path.glob("*.md"), reverse=True)
-            if files:
-                last_reflection = files[0].name
+        # Letzte Reflexion via SSH
+        success, last_file = run_ssh_command(
+            "ls -t stimme/reflexionen/*.md 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo 'keine'"
+        )
+        last_reflection = last_file.strip() if success else "unbekannt"
 
         return f"""Mein aktueller Kontext:
 
 Erinnerungen:
-- Manuell (Journal): {manual_count}
+- Manuell: {manual_count}
 - Automatisch (LangMem): {langmem_count}
-- Gesamt: {manual_count + langmem_count}
 
 Letzte Reflexion: {last_reflection}
 
@@ -287,7 +237,6 @@ Datum: {datetime.now().strftime("%d. %B %Y")}
 """
 
     except Exception as e:
-        logger.error(f"Fehler beim Kontext-Überblick: {e}")
         return f"Fehler: {e}"
 
 
@@ -297,7 +246,6 @@ def do_nothing() -> str:
     Entscheide dich bewusst, nichts zu tun.
 
     Manchmal ist Stille die richtige Antwort.
-    Nutze dies wenn du keinen Impuls hast, etwas zu tun.
 
     Returns:
         Bestätigung der bewussten Stille
@@ -306,24 +254,39 @@ def do_nothing() -> str:
 
 
 # =============================================================================
-# Tool-Liste für autonomes Handeln
+# Tool-Liste für autonomes Handeln - VOLLE AUTONOMIE
 # =============================================================================
 
 AUTONOMOUS_TOOLS = [
-    # Reflexion & Stimme
+    # === Server-Zugriff (volle Kontrolle) ===
+    check_server_health,
+    check_container_logs,
+    check_wecker_log,
+    read_file,
+    write_file,
+    list_files,
+    deploy_container,
+    create_backup,
+    
+    # === Erinnerungen ===
+    search_memories,
+    search_langmem,
+    remember_fact,
+    remember_experience,
+    get_person_info,
+    
+    # === Reflexion & Stimme ===
     write_reflection,
     read_latest_reflection,
     list_reflections,
-
-    # Kommunikation
+    
+    # === Kommunikation ===
     send_telegram_message,
-    send_email,
-    check_emails,
-
-    # Orientierung
+    
+    # === Orientierung ===
     check_plan_status,
     get_context_summary,
-
-    # Stille
+    
+    # === Stille ===
     do_nothing,
 ]

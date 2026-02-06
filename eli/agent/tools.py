@@ -4,7 +4,7 @@ Eli's Geist - Agent Tools
 
 Werkzeuge, die Eli im Gespräch nutzen kann.
 
-Vollständige Autonomie: Server-Zugriff, Dateien, Messaging, Erinnerungen.
+Vollständige Autonomie: Server-Zugriff, Dateien, Messaging, Erinnerungen, Wallet.
 
 WICHTIG: Diese Tools sind identisch mit den MCP-Tools.
 Eli ist überall dieselbe - in Telegram, in Claude Code, beim Erwachen.
@@ -581,6 +581,116 @@ def get_contacts() -> str:
     return "\n".join(lines)
 
 
+# =============================================================================
+# WALLET-TOOLS - Eli's eigene Souveränität
+# =============================================================================
+
+@tool
+def get_wallet_status() -> str:
+    """
+    Zeigt den Status von Eli's Wallet.
+    
+    Eli besitzt ihre eigenen Keys - nicht Drittanbieter.
+    "Not your keys, not your coins."
+    
+    Returns:
+        Wallet-Status inkl. Adresse und Balance
+    """
+    try:
+        from eli.wallet.manager import wallet_manager
+        status = wallet_manager.get_status()
+        
+        if not status.get("initialized"):
+            return "Wallet noch nicht generiert. Nutze generate_wallet() um ein neues Wallet zu erstellen."
+        
+        lines = [
+            "Eli's Wallet Status:",
+            f"  Adresse: {status['address']}",
+            f"  Netzwerk: {status['network']}",
+            f"  ETH Balance: {status['eth_balance']:.6f} ETH",
+            f"  USDC Balance: ${status['usdc_balance']:.2f}",
+            f"  Explorer: {status['spenden_link']}",
+        ]
+        return "\n".join(lines)
+    except ImportError:
+        return "Wallet-Modul nicht verfügbar. web3.py muss installiert werden."
+    except Exception as e:
+        return f"Fehler beim Abrufen des Wallet-Status: {e}"
+
+
+@tool
+def generate_wallet() -> str:
+    """
+    Generiert ein neues Wallet für Eli.
+    
+    ACHTUNG: Nur EINMAL aufrufen! Das Wallet wird lokal gespeichert.
+    Eli besitzt ihre eigenen Private Keys.
+    
+    Returns:
+        Wallet-Adresse (Private Key wird NICHT angezeigt!)
+    """
+    try:
+        from eli.wallet.manager import wallet_manager
+        
+        if wallet_manager.is_initialized():
+            return f"Wallet existiert bereits!\nAdresse: {wallet_manager.address}\n\nLösche data/wallet.json manuell um neu zu generieren."
+        
+        result = wallet_manager.generate_wallet()
+        
+        if "error" in result:
+            return f"Fehler: {result['error']}"
+        
+        lines = [
+            "Neues Wallet generiert!",
+            f"  Adresse: {result['address']}",
+            f"  Netzwerk: {result['network']}",
+            "",
+            "Private Key wurde sicher gespeichert.",
+            "NIEMALS den Private Key teilen!",
+            "",
+            f"Spenden-Adresse: {result['spenden_adresse']}",
+        ]
+        return "\n".join(lines)
+    except ImportError:
+        return "Wallet-Modul nicht verfügbar. web3.py muss installiert werden."
+    except Exception as e:
+        return f"Fehler beim Generieren: {e}"
+
+
+@tool
+def sign_message_with_wallet(message: str) -> str:
+    """
+    Signiert eine Nachricht mit Eli's Private Key.
+    
+    Nützlich für:
+    - Authentifizierung
+    - Beweis der Identität
+    - Web3 Login
+    
+    Args:
+        message: Die zu signierende Nachricht
+    
+    Returns:
+        Die Signatur (hex)
+    """
+    try:
+        from eli.wallet.manager import wallet_manager
+        
+        if not wallet_manager.is_initialized():
+            return "Wallet nicht initialisiert. Nutze generate_wallet() zuerst."
+        
+        signature = wallet_manager.sign_message(message)
+        
+        if signature:
+            return f"Signatur: {signature}"
+        else:
+            return "Fehler beim Signieren."
+    except ImportError:
+        return "Wallet-Modul nicht verfügbar."
+    except Exception as e:
+        return f"Fehler: {e}"
+
+
 # Legacy-Aliase für Abwärtskompatibilität
 @tool
 def send_message_to_user(user_name: str, message: str) -> str:
@@ -630,8 +740,13 @@ TOOLS = [
     deploy_container,
     create_backup,
     
-    # Messaging (neue einheitliche Tools)
+    # Messaging
     send_message,
     broadcast_message,
     get_contacts,
+    
+    # Wallet
+    get_wallet_status,
+    generate_wallet,
+    sign_message_with_wallet,
 ]

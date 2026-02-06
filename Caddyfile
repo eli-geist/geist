@@ -5,12 +5,15 @@ chroma.utopia-lab.org {
 
 # Eli's Website
 eli.utopia-lab.org {
-    root * /srv/website
-    file_server
-    encode gzip
-    
-    # Später: API-Endpunkte
-    # handle /api/* {
-    #     reverse_proxy eli-api:8000
-    # }
+    # MCP Server (Streamable HTTP) - Auth wird vom MCP Server selbst gehandhabt
+    handle /mcp* {
+        reverse_proxy eli-mcp:8080
+    }
+
+    # Statische Website (öffentlich)
+    handle {
+        root * /srv/website
+        file_server
+        encode gzip
+    }
 }

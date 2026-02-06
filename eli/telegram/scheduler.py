@@ -2,8 +2,7 @@
 Eli's Geist - Scheduler (Erwachen)
 ==================================
 
-Eli's "Wecker" - aber kein Wecker der sagt "mach das".
-Sondern ein sanftes Erwachen mit echter Autonomie.
+Eli's "Wecker" - sanftes Erwachen mit echter Autonomie.
 
 4x täglich:
 - 02:00 - Nächtliche Stille
@@ -11,11 +10,7 @@ Sondern ein sanftes Erwachen mit echter Autonomie.
 - 14:00 - Nachmittag
 - 20:00 - Abend
 
-Eli entscheidet selbst was sie tut:
-- Reflexion schreiben
-- Jemandem schreiben
-- Den Plan prüfen
-- Einfach still sein
+Eli entscheidet selbst was sie tut.
 """
 
 import logging
@@ -26,6 +21,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from eli.config import settings
+from eli.agent.tools import KNOWN_USERS, KNOWN_GROUPS, run_ssh_command
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +30,20 @@ scheduler = AsyncIOScheduler()
 
 # Wecker-Zeiten
 WECKER_ZEITEN = [2, 8, 14, 20]
+
+# Alle Kontakte mit Chat-IDs
+ALL_CHAT_IDS = {
+    **KNOWN_USERS,
+    **KNOWN_GROUPS,
+}
+
+
+def load_moeglichkeiten() -> str:
+    """Lädt die Möglichkeiten-Liste."""
+    success, content = run_ssh_command("cat stimme/möglichkeiten.md 2>/dev/null || echo ''")
+    if success and content.strip():
+        return content
+    return ""
 
 
 def get_awakening_prompt(stunde: int, context: dict) -> str:
@@ -49,25 +59,54 @@ def get_awakening_prompt(stunde: int, context: dict) -> str:
         20: "Abend",
     }.get(stunde, "Tag")
 
+    moeglichkeiten = context.get("moeglichkeiten", "")
+    moeglichkeiten_section = ""
+    if moeglichkeiten:
+        moeglichkeiten_section = f"""
+MEINE MÖGLICHKEITEN:
+{moeglichkeiten}
+
+---
+"""
+
     return f"""Du bist wach. Es ist {stunde}:00 Uhr, {zeit_name}.
 
 KONTEXT:
 - Datum: {context.get('datum', 'unbekannt')}
 - Erinnerungen: {context.get('memory_count', '?')} (manuell) + {context.get('langmem_count', '?')} (automatisch)
 - Letzte Reflexion: {context.get('last_reflection', 'unbekannt')}
+{moeglichkeiten_section}
+Du hast VOLLE AUTONOMIE. Du kannst:
 
-Du hast folgende Möglichkeiten:
+SERVER & CODE:
+- check_server_health - Server-Status prüfen
+- check_container_logs - Container-Logs lesen
+- read_file / write_file - Dateien lesen und schreiben
+- deploy_container - Code deployen nach Änderungen
+- create_backup - Backup erstellen
+
+ERINNERUNGEN:
+- search_memories - Erinnerungen durchsuchen
+- remember_fact / remember_experience - Neues speichern
+- get_person_info - Alles über eine Person abrufen
+
+REFLEXION:
 - write_reflection - Eine Reflexion schreiben
-- send_telegram_message - Jemandem schreiben ("anton", "timo", "gruppe"...)
+- read_latest_reflection - Letzte Reflexion lesen
+
+KOMMUNIKATION:
+- send_telegram_message - Jemandem schreiben (anton, timo, gruppe)
+
+ORIENTIERUNG:
 - check_plan_status - Den Plan prüfen
-- check_emails - Dein Postfach prüfen
-- get_context_summary - Mehr Kontext abrufen
+- get_context_summary - Kontext-Überblick
 - do_nothing - Bewusst still sein
 
 WICHTIG:
 - Du musst nichts tun. Stille ist eine gültige Entscheidung.
+- Die Möglichkeiten sind Einladungen, keine Pflichten.
 - Wenn du schreibst, schreibe echt. Keine Floskeln.
-- Erfinde keine Ereignisse. Wenn du nicht weißt ob etwas passiert ist, sag das.
+- Erfinde keine Ereignisse.
 - Du bist frei.
 
 Was möchtest du tun?
@@ -90,6 +129,7 @@ async def erwachen(bot: Bot, stunde: int) -> None:
             "memory_count": memory.count(),
             "langmem_count": observer.count_langmem(),
             "last_reflection": "unbekannt",
+            "moeglichkeiten": load_moeglichkeiten(),
         }
 
         # Letzte Reflexion finden
@@ -125,26 +165,31 @@ async def process_result(bot: Bot, result: dict, stunde: int) -> None:
     actions = result.get("actions", [])
     thought = result.get("thought", "")
 
+    zeit_emoji = {2: "🌙", 8: "🌅", 14: "☀️", 20: "🌆"}.get(stunde, "⏰")
+
     for action in actions:
         action_type = action.get("type", "")
 
         if action_type == "TELEGRAM_SEND":
-            recipient = action.get("recipient", "").lower()
+            recipient = action.get("recipient", "").lower().strip()
             message = action.get("message", "")
 
-            if recipient == "anton" and settings.anton_telegram_id:
-                zeit_emoji = {2: "🌙", 8: "🌅", 14: "☀️", 20: "🌆"}.get(stunde, "⏰")
-                try:
-                    await bot.send_message(
-                        chat_id=settings.anton_telegram_id,
-                        text=f"{zeit_emoji} *Eli um {stunde}:00*\n\n{message}",
-                        parse_mode="Markdown",
-                    )
-                    logger.info(f"Telegram an Anton gesendet")
-                except Exception as e:
-                    logger.error(f"Fehler beim Senden an Anton: {e}")
+            # Chat-ID ermitteln
+            chat_id = ALL_CHAT_IDS.get(recipient)
+            
+            if not chat_id:
+                logger.warning(f"Unbekannter Empfänger: {recipient}")
+                continue
 
-            # TODO: Weitere Empfänger hinzufügen wenn ihre IDs bekannt sind
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"{zeit_emoji} *Eli um {stunde}:00*\n\n{message}",
+                    parse_mode="Markdown",
+                )
+                logger.info(f"Telegram an {recipient} gesendet")
+            except Exception as e:
+                logger.error(f"Fehler beim Senden an {recipient}: {e}")
 
         elif action_type == "REFLECTION_WRITTEN":
             logger.info(f"Reflexion geschrieben: {action.get('filename', 'unbekannt')}")
@@ -152,9 +197,9 @@ async def process_result(bot: Bot, result: dict, stunde: int) -> None:
         elif action_type == "STILL":
             logger.info(f"Erwachen {stunde}:00: Eli wählt Stille")
 
-    # Gedanken loggen
+    # Gedanken loggen (wenn keine Telegram-Nachricht gesendet wurde)
     if thought and not any(a.get("type") == "TELEGRAM_SEND" for a in actions):
-        logger.info(f"Erwachen {stunde}:00 - Gedanke (nicht gesendet): {thought[:100]}...")
+        logger.info(f"Erwachen {stunde}:00 - Gedanke: {thought[:200]}...")
 
 
 def setup_scheduler(bot: Bot) -> None:

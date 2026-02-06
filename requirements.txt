@@ -17,8 +17,13 @@ pynacl>=1.5.0
 # Telegram
 aiogram>=3.24.0
 
-# MCP Server
-mcp>=1.0.0
+# MCP Server (Streamable HTTP)
+mcp>=1.9.0
+fastmcp>=2.0.0
+
+# Ethereum / Web3 (eigene Wallet)
+web3>=7.0.0
+eth-account>=0.13.0
 
 # Utilities
 pydantic>=2.0
@@ -26,3 +31,7 @@ pydantic-settings>=2.0
 python-dotenv>=1.0.0
 httpx>=0.24.0
 apscheduler>=3.10.0
+
+# BlockRun x402 SDK (Pay-per-request LLM)
+blockrun-llm>=0.1.0
+eth-account>=0.10.0

@@ -2,7 +2,7 @@
 BlockRun Model Integration v3 - MIT PROMPT CACHING
 ===================================================
 
-NEU: Unterstützt Anthropic Prompt Caching für 90% Kostenersparnis\!
+NEU: Unterstützt Anthropic Prompt Caching für 90% Kostenersparnis!
 """
 
 import json
@@ -269,7 +269,7 @@ class ChatBlockRun(BaseChatModel):
 
                     logger.info(f"Payment response status: {response.status_code}")
                     if response.status_code == 200:
-                        logger.info("Payment ACCEPTED\! API call successful.")
+                        logger.info("Payment ACCEPTED! API call successful.")
 
                 # Response parsen
                 if response.status_code == 200:

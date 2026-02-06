@@ -6,7 +6,7 @@ Lädt Umgebungsvariablen und stellt sie typsicher bereit.
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
@@ -22,8 +22,17 @@ class Settings(BaseSettings):
     chroma_auth_token: str | None = None
     chroma_collection: str = "erinnerungen"
 
-    # Anthropic
+    # Anthropic (direkter API Zugang)
     anthropic_api_key: str = ""
+
+    # LLM Provider Auswahl
+    # "anthropic" = Direkte Anthropic API (braucht anthropic_api_key)
+    # "blockrun" = BlockRun.ai mit x402 Payments (braucht Wallet mit USDC)
+    llm_provider: Literal["anthropic", "blockrun"] = "blockrun"
+    
+    # x402 Settings
+    x402_max_payment_usdc: float = 0.50  # Max 50 Cent pro Request
+    x402_preferred_network: str = "eip155:8453"  # Base Mainnet
 
     # Groq (für Whisper Voice Transcription)
     groq_api_key: str = ""
@@ -75,6 +84,11 @@ class Settings(BaseSettings):
         """Stellt sicher, dass das Datenverzeichnis existiert."""
         self.data_path.mkdir(parents=True, exist_ok=True)
         return self.data_path
+    
+    @property
+    def use_blockrun(self) -> bool:
+        """Prüft ob BlockRun/x402 verwendet werden soll."""
+        return self.llm_provider == "blockrun"
 
 
 # Singleton
