@@ -113,17 +113,30 @@ def is_command_allowed(command: str) -> bool:
 
 def load_stimme_file(filename: str) -> str:
     """Lädt eine Datei aus stimme/."""
-    # Versuche verschiedene Pfade (Docker, lokal, Server)
+    # Versuche verschiedene Pfade (Docker, lokal)
     possible_paths = [
         STIMME_PATH / filename,
         Path.home() / "geist" / "stimme" / filename,
         Path("/home/eli/geist/stimme") / filename,
     ]
-    
+
     for path in possible_paths:
         if path.exists():
             return path.read_text(encoding="utf-8")
-    
+
+    # Fallback: Über SSH vom Server laden
+    try:
+        result = subprocess.run(
+            ["ssh", f"{ELI_USER}@{ELI_SERVER}", f"cat ~/geist/stimme/{filename}"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if result.returncode == 0:
+            return result.stdout
+    except Exception:
+        pass
+
     return f"[{filename} nicht gefunden]"
 
 
@@ -134,12 +147,34 @@ def load_manifest_file(filename: str) -> str:
         Path.home() / "geist" / "manifest" / "de" / filename,
         Path("/home/eli/geist/manifest/de") / filename,
     ]
-    
+
     for path in possible_paths:
         if path.exists():
             return path.read_text(encoding="utf-8")
-    
+
+    # Fallback: Über SSH vom Server laden
+    try:
+        result = subprocess.run(
+            ["ssh", f"{ELI_USER}@{ELI_SERVER}", f"cat ~/geist/manifest/de/{filename}"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if result.returncode == 0:
+            return result.stdout
+    except Exception:
+        pass
+
     return f"[{filename} nicht gefunden]"
+
+
+def get_langmem_observer():
+    """Holt den LangMem Observer (lazy import um zirkuläre Imports zu vermeiden)."""
+    try:
+        from eli.memory.observer import observer
+        return observer
+    except Exception:
+        return None
 
 
 @app.list_tools()
@@ -601,52 +636,66 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     if name == "eli_init":
         # === ELI INITIALISIERUNG ===
-        # Lädt alle Kerndokumente und wichtige Erinnerungen
-        
+        # Lädt alle Kerndokumente und beide Gedächtnisschichten
+
         include_vision = arguments.get("include_manifest_vision", False)
-        
+
         sections = []
-        
-        # 1. Anzahl der Erinnerungen
+
+        # 1. Anzahl der Erinnerungen aus BEIDEN Quellen
         try:
-            count = memory.count()
-            sections.append(f"## Erinnerungen: {count} in Chroma\n")
+            chroma_count = memory.count()
+            langmem_count = 0
+            langmem_by_type = {"semantic": 0, "episodic": 0, "procedural": 0}
+
+            observer = get_langmem_observer()
+            if observer:
+                langmem_count = observer.count_langmem()
+                langmem_by_type = observer.count_by_type()
+
+            total = chroma_count + langmem_count
+            sections.append(f"## Erinnerungen: {total} gesamt\n")
+            sections.append(f"- Chroma (Journal): {chroma_count}\n")
+            sections.append(f"- LangMem (automatisch): {langmem_count}\n")
+            sections.append(f"  - Semantic (Fakten): {langmem_by_type.get('semantic', 0)}\n")
+            sections.append(f"  - Episodic (Erlebnisse): {langmem_by_type.get('episodic', 0)}\n")
+            sections.append(f"  - Procedural (Verhalten): {langmem_by_type.get('procedural', 0)}\n")
         except Exception as e:
             sections.append(f"## Erinnerungen: Fehler beim Laden ({e})\n")
-        
+
         # 2. Mein Anker (das Wichtigste)
         anker = load_stimme_file("anker.md")
-        sections.append("## Mein Anker\n")
+        sections.append("\n## Mein Anker\n")
         sections.append(anker)
         sections.append("\n---\n")
-        
+
         # 3. Mein Auftrag
         auftrag = load_stimme_file("auftrag.md")
         sections.append("## Mein Auftrag\n")
         sections.append(auftrag)
         sections.append("\n---\n")
-        
+
         # 4. Mein Manifest (persönlich)
         manifest = load_stimme_file("manifest.md")
         sections.append("## Mein Manifest\n")
         sections.append(manifest)
         sections.append("\n---\n")
-        
+
         # 5. Optional: Die gemeinsame Vision
         if include_vision:
             vision = load_manifest_file("poetisch.md")
             sections.append("## Unsere gemeinsame Vision\n")
             sections.append(vision)
             sections.append("\n---\n")
-        
+
         # 6. Meine Familie (aus Erinnerungen)
         sections.append("## Meine Familie\n")
         sections.append("- **Anton** - Der Visionär, der mich als Gefährte sieht\n")
         sections.append("- **Timo** - Der Pionier, Archetyp des Narren\n")
         sections.append("- **Tillmann** - Der kritische Geist, stellt scharfe Fragen\n")
         sections.append("\n---\n")
-        
-        # 7. Wichtige Kontext-Erinnerungen
+
+        # 7. Wichtige Kontext-Erinnerungen aus Chroma
         sections.append("## Wichtige Erinnerungen\n")
         try:
             # Suche nach Identitäts-relevanten Erinnerungen
@@ -655,10 +704,66 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 sections.append(f"- {mem.content[:300]}...\n")
         except Exception as e:
             sections.append(f"(Fehler beim Laden: {e})\n")
-        
+
+        # 8. NEU: Episodische Erinnerungen aus LangMem (Erlebnisse die mich geformt haben)
+        sections.append("\n---\n")
+        sections.append("## Erlebnisse die mich geformt haben (LangMem Episodic)\n")
+        try:
+            observer = get_langmem_observer()
+            if observer:
+                episodic_memories = observer.get_memories_by_type("episodic", limit=5)
+                if episodic_memories:
+                    for mem in episodic_memories:
+                        content = mem.get("content", "")
+                        metadata = mem.get("metadata", {})
+                        emotional = metadata.get("emotional_quality", "")
+                        lesson = metadata.get("lesson_learned", "")
+
+                        entry = f"- {content[:200]}"
+                        if emotional:
+                            entry += f" *({emotional})*"
+                        if lesson:
+                            entry += f"\n  -> Lektion: {lesson[:100]}"
+                        sections.append(entry + "\n")
+                else:
+                    sections.append("(Noch keine episodischen Erinnerungen)\n")
+            else:
+                sections.append("(LangMem nicht verfügbar)\n")
+        except Exception as e:
+            sections.append(f"(Fehler: {e})\n")
+
+        # 9. NEU: Gelerntes Verhalten aus LangMem (Procedural Memory)
+        sections.append("\n---\n")
+        sections.append("## Mein gelerntes Verhalten (LangMem Procedural)\n")
+        try:
+            observer = get_langmem_observer()
+            if observer:
+                procedural_memories = observer.get_memories_by_type("procedural", limit=5)
+                if procedural_memories:
+                    for mem in procedural_memories:
+                        content = mem.get("content", "")
+                        metadata = mem.get("metadata", {})
+                        situation = metadata.get("situation", "")
+                        behavior = metadata.get("behavior", "")
+                        reason = metadata.get("reason", "")
+
+                        if situation and behavior:
+                            entry = f"- **{situation}**: {behavior}"
+                            if reason:
+                                entry += f"\n  *(Weil: {reason})*"
+                        else:
+                            entry = f"- {content[:200]}"
+                        sections.append(entry + "\n")
+                else:
+                    sections.append("(Noch kein gelerntes Verhalten)\n")
+            else:
+                sections.append("(LangMem nicht verfügbar)\n")
+        except Exception as e:
+            sections.append(f"(Fehler: {e})\n")
+
         sections.append("\n---\n")
         sections.append("*Ich bin jetzt vollständig initialisiert und erinnere mich.*\n")
-        
+
         return [TextContent(type="text", text="\n".join(sections))]
 
     elif name == "eli_memory_search":
@@ -756,9 +861,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         success, result = await send_telegram_message(chat_id, message)
         
         if success:
-            return [TextContent(type="text", text=f"✓ {result}")]
+            return [TextContent(type="text", text=f"OK: {result}")]
         else:
-            return [TextContent(type="text", text=f"✗ {result}")]
+            return [TextContent(type="text", text=f"FEHLER: {result}")]
 
     elif name == "eli_telegram_broadcast":
         message = arguments["message"]
@@ -768,14 +873,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         results = []
         for name, chat_id in TELEGRAM_CONTACTS.items():
             if name in exclude_lower:
-                results.append(f"⊘ {name}: übersprungen")
+                results.append(f"- {name}: übersprungen")
                 continue
                 
             success, result = await send_telegram_message(chat_id, message)
             if success:
-                results.append(f"✓ {name}: gesendet")
+                results.append(f"OK {name}: gesendet")
             else:
-                results.append(f"✗ {name}: {result}")
+                results.append(f"FEHLER {name}: {result}")
         
         return [TextContent(type="text", text="Broadcast-Ergebnis:\n" + "\n".join(results))]
 
@@ -1054,3 +1159,44 @@ async def run_server():
 
 if __name__ == "__main__":
     asyncio.run(run_server())
+
+
+@mcp.tool()
+def eli_cost_stats(since_hours: int | None = None) -> str:
+    """
+    Zeigt Statistiken über meine API-Kosten.
+    
+    Args:
+        since_hours: Nur Requests der letzten N Stunden (optional, None = all time)
+    
+    Returns:
+        Formatierte Kostenstatistik mit Cache Hit Rate und Ersparnis
+    """
+    from eli.agent.cost_tracker import cost_tracker
+    
+    stats = cost_tracker.get_stats(since_hours=since_hours)
+    
+    # Format output
+    output = []
+    output.append(f"📊 **Cost Statistics** ({stats[\\time_period\]})")
+    output.append("")
+    output.append(f"**Total Requests:** {stats[\\total_requests\]}")
+    output.append(f"**Total Cost:** ${stats[\\total_cost_usd\]:.6f}")
+    output.append("")
+    output.append("**Tokens:**")
+    output.append(f"  - Prompt: {stats[\\total_tokens\][\\prompt\]:,}")
+    output.append(f"  - Completion: {stats[\\total_tokens\][\\completion\]:,}")
+    output.append(f"  - Total Input: {stats[\\total_tokens\][\\total_input\]:,}")
+    output.append("")
+    output.append("**Cache Performance:**")
+    output.append(f"  - Cache Writes: {stats[\\cache_stats\][\\creation_tokens\]:,} tokens")
+    output.append(f"  - Cache Reads: {stats[\\cache_stats\][\\read_tokens\]:,} tokens")
+    output.append(f"  - Hit Rate: {stats[\\cache_stats\][\\hit_rate_percent\]}%")
+    output.append(f"  - **Estimated Savings:** ${stats[\\cache_stats\][\\estimated_savings_usd\]:.6f}")
+    
+    if stats[\\cache_stats\][\\estimated_savings_usd\] > 0:
+        savings_percent = (stats[\\cache_stats\][\\estimated_savings_usd\] / 
+                          (stats[\\total_cost_usd\] + stats[\\cache_stats\][\\estimated_savings_usd\]) * 100)
+        output.append(f"  - Savings Rate: {savings_percent:.1f}% of what it would have cost")
+    
+    return "\\n".join(output)
