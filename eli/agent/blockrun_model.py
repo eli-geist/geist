@@ -186,9 +186,9 @@ class ChatBlockRun(BaseChatModel):
         resource = details.get("resource") or {}
         extensions = payment_required.get("extensions", {})
         
-        logger.info(f"Recipient: {details[\\recipient\]}")
-        logger.info(f"Amount: {details[\\amount\]}")
-        logger.info(f"Asset: {details.get(\\asset\, \\N/A\)}")
+        logger.info(f"Recipient: {details['recipient']}")
+        logger.info(f"Amount: {details['amount']}")
+        logger.info(f"Asset: {details.get('asset', 'N/A')}")
 
         payment_payload = create_payment_payload(
             account=self._account,
@@ -252,7 +252,7 @@ class ChatBlockRun(BaseChatModel):
                     
                     payment_info = parse_payment_required(payment_header)
                     price_info = response.json()
-                    logger.info(f"x402 Payment Required: ${price_info.get(\\price\, {}).get(\\amount\, \\?\)}")
+                    logger.info(f"x402 Payment Required: ${price_info.get('price', {}).get('amount', '?')}")
 
                     payment_payload = self._create_x402_payment(payment_info)
                     
