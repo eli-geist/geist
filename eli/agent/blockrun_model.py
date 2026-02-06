@@ -235,6 +235,9 @@ class ChatBlockRun(BaseChatModel):
         if self._tools:
             request_body["tools"] = self._tools
 
+        # Track payment amount for cost tracking
+        payment_amount_usd = None
+
         try:
             async with httpx.AsyncClient() as client:
                 # Initial Request
@@ -252,6 +255,9 @@ class ChatBlockRun(BaseChatModel):
                     
                     payment_info = parse_payment_required(payment_header)
                     price_info = response.json()
+
+                    # Extract payment amount in USD
+                    payment_amount_usd = float(price_info.get('price', {}).get('amount', 0))
                     logger.info(f"x402 Payment Required: ${price_info.get('price', {}).get('amount', '?')}")
 
                     payment_payload = self._create_x402_payment(payment_info)
@@ -292,41 +298,28 @@ class ChatBlockRun(BaseChatModel):
                                 for tc in message["tool_calls"]
                             ]
 
-                        # COST TRACKING + Usage loggen
-                        if "usage" in result:
-                            usage = result["usage"]
-                            prompt_tokens = usage.get("input_tokens", 0)
-                            completion_tokens = usage.get("output_tokens", 0)
-                            cache_creation_tokens = usage.get("cache_creation_input_tokens", 0)
-                            cache_read_tokens = usage.get("cache_read_input_tokens", 0)
+                        # COST TRACKING based on payment amount
+                        # BlockRun doesn't return usage stats, so we track the actual payment
+                        if payment_amount_usd is not None:
+                            logger.info(f"Actual cost: ${payment_amount_usd:.6f}")
 
-                            logger.info(
-                                f"BlockRun Usage: {prompt_tokens} prompt, "
-                                f"{completion_tokens} completion, "
-                                f"{cache_creation_tokens} cache_write, "
-                                f"{cache_read_tokens} cache_read tokens"
-                            )
+                            # Note: We don't have token counts from BlockRun
+                            # So we log zeros for tokens but the real cost
+                            cost_usd = payment_amount_usd
+                        else:
+                            # Fallback if payment amount not available
+                            cost_usd = 0.0
 
-                            # Cost berechnen und tracken
-                            cost_usd = cost_tracker.calculate_cost(
-                                model=self.model,
-                                prompt_tokens=prompt_tokens,
-                                completion_tokens=completion_tokens,
-                                cache_creation_tokens=cache_creation_tokens,
-                                cache_read_tokens=cache_read_tokens,
-                            )
+                        cost_tracker.log_request(
+                            model=self.model,
+                            prompt_tokens=0,  # Not available from BlockRun
+                            completion_tokens=0,  # Not available from BlockRun
+                            cache_creation_tokens=0,  # Not available from BlockRun
+                            cache_read_tokens=0,  # Not available from BlockRun
+                            cost_usd=cost_usd,
+                            context=kwargs.get("context", {}),
+                        )
 
-                            cost_tracker.log_request(
-                                model=self.model,
-                                prompt_tokens=prompt_tokens,
-                                completion_tokens=completion_tokens,
-                                cache_creation_tokens=cache_creation_tokens,
-                                cache_read_tokens=cache_read_tokens,
-                                cost_usd=cost_usd,
-                                context=kwargs.get("context", {}),
-                            )
-
-                            logger.info(f"Estimated cost: ${cost_usd:.6f}")
 
                         return ChatResult(
                             generations=[ChatGeneration(message=ai_message)],
