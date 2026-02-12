@@ -1,0 +1,29 @@
+{
+  "users": {
+    "anton": {
+      "token_hash": "b17907d177bc18fb952d1df7e6c670374a98ecb85fd7eb476c0f28fa37f09de6",
+      "role": "admin",
+      "telegram_id": 197637205
+    },
+    "timo": {
+      "token_hash": "cb08f097a1ecf9c4bd992ec5de5e1908d37d865d8f9b887f484bd66653137fc2",
+      "role": "member",
+      "telegram_id": 6229744187
+    },
+    "tillmann": {
+      "token_hash": "7c4063d6bd9ef55ce57c9ecbcf3e093e9601b6c0fb4257b4feff41d2c53c0908",
+      "role": "member",
+      "telegram_id": 11550087
+    },
+    "mathias": {
+      "token_hash": "8340af64364a9cafb2271fd80778c3dd149ffbdb830a27fa41e8b6c61219b180",
+      "role": "member",
+      "telegram_id": 248516003
+    },
+    "sebastian": {
+      "token_hash": "0f403fc78d347ebf3731b938e078afca5f84037e768a72232d26bce85d09a959",
+      "role": "member",
+      "telegram_id": 431633818
+    }
+  }
+}

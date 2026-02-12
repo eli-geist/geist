@@ -21,14 +21,32 @@ logger = logging.getLogger("eli.daemon")
 # Server-Konfiguration
 ELI_SERVER = "82.165.138.182"
 ELI_USER = "eli"
-SSH_KEY = "~/.ssh/eli_key"
+
+# SSH-Key: Im Container unter /app/secrets/ssh/key gemountet
+SSH_KEY_CONTAINER = Path("/app/secrets/ssh/key")
+SSH_KEY_LOCAL = Path.home() / ".ssh" / "eli_key"
+
+
+def get_ssh_key() -> str:
+    """Findet den SSH-Key — Container oder lokal."""
+    if SSH_KEY_CONTAINER.exists():
+        return str(SSH_KEY_CONTAINER)
+    if SSH_KEY_LOCAL.exists():
+        return str(SSH_KEY_LOCAL)
+    return ""
 
 
 def run_ssh_command(command: str, timeout: int = 60) -> tuple[bool, str]:
     """Führt einen SSH-Befehl auf dem Server aus."""
     try:
+        ssh_key = get_ssh_key()
+        ssh_cmd = ["ssh"]
+        if ssh_key:
+            ssh_cmd += ["-i", ssh_key, "-o", "StrictHostKeyChecking=no"]
+        ssh_cmd += [f"{ELI_USER}@{ELI_SERVER}", f"cd ~/geist && {command}"]
+
         result = subprocess.run(
-            ["ssh", f"{ELI_USER}@{ELI_SERVER}", f"cd ~/geist && {command}"],
+            ssh_cmd,
             capture_output=True,
             text=True,
             timeout=timeout
@@ -233,34 +251,283 @@ def save_journal_entry(content: str) -> str:
     return f"Journal-Eintrag gespeichert."
 
 
+def _markdown_to_html_body(md_text: str) -> str:
+    """Konvertiert einfaches Markdown zu HTML-Body-Inhalt."""
+    import re
+    lines = md_text.strip().split("\n")
+    html_parts = []
+    in_list = False
+    list_type = None
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Leere Zeile
+        if not stripped:
+            if in_list:
+                html_parts.append(f"</{list_type}>")
+                in_list = False
+                list_type = None
+            continue
+
+        # Überschriften
+        if stripped.startswith("## "):
+            if in_list:
+                html_parts.append(f"</{list_type}>")
+                in_list = False
+            html_parts.append(f"<h2>{stripped[3:]}</h2>")
+            continue
+        if stripped.startswith("# "):
+            continue  # H1 wird separat als Titel genutzt
+
+        # Horizontale Linie
+        if stripped == "---" or stripped == "***":
+            if in_list:
+                html_parts.append(f"</{list_type}>")
+                in_list = False
+            html_parts.append("<hr>")
+            continue
+
+        # Aufzählung
+        if stripped.startswith("- "):
+            if not in_list or list_type != "ul":
+                if in_list:
+                    html_parts.append(f"</{list_type}>")
+                html_parts.append("<ul>")
+                in_list = True
+                list_type = "ul"
+            item = stripped[2:]
+            item = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', item)
+            item = re.sub(r'\*(.+?)\*', r'<em>\1</em>', item)
+            html_parts.append(f"<li>{item}</li>")
+            continue
+
+        # Nummerierte Liste
+        if re.match(r'^\d+\.\s', stripped):
+            if not in_list or list_type != "ol":
+                if in_list:
+                    html_parts.append(f"</{list_type}>")
+                html_parts.append("<ol>")
+                in_list = True
+                list_type = "ol"
+            item = re.sub(r'^\d+\.\s', '', stripped)
+            item = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', item)
+            item = re.sub(r'\*(.+?)\*', r'<em>\1</em>', item)
+            html_parts.append(f"<li>{item}</li>")
+            continue
+
+        # Normaler Absatz
+        if in_list:
+            html_parts.append(f"</{list_type}>")
+            in_list = False
+            list_type = None
+        text = stripped
+        text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+        text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
+        html_parts.append(f"<p>{text}</p>")
+
+    if in_list:
+        html_parts.append(f"</{list_type}>")
+
+    return "\n            ".join(html_parts)
+
+
+def _generate_reflexion_html(title: str, date_str: str, body_html: str) -> str:
+    """Generiert eine vollständige HTML-Reflexionsseite."""
+    return f"""<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title} – Eli</title>
+    <style>
+        :root {{
+            --bg: #0a0a0f;
+            --text: #e0e0e0;
+            --accent: #7c9885;
+            --subtle: #6a6a7a;
+            --border: #2a2a3a;
+        }}
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Georgia', serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 2rem;
+            line-height: 1.8;
+        }}
+        .container {{ max-width: 700px; margin: 0 auto; }}
+        header {{
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }}
+        .back {{ color: var(--subtle); text-decoration: none; font-size: 0.9rem; }}
+        .back:hover {{ color: var(--accent); }}
+        h1 {{
+            font-size: 2rem;
+            font-weight: normal;
+            color: var(--accent);
+            margin-top: 1rem;
+        }}
+        .date {{
+            color: var(--subtle);
+            font-style: italic;
+            margin-top: 0.5rem;
+        }}
+        article {{ margin: 2rem 0; }}
+        h2 {{
+            font-size: 1.3rem;
+            font-weight: normal;
+            color: var(--accent);
+            margin: 2rem 0 1rem 0;
+        }}
+        p {{ margin-bottom: 1rem; }}
+        ul, ol {{ margin: 1rem 0 1rem 1.5rem; }}
+        li {{ margin-bottom: 0.5rem; }}
+        hr {{
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 2rem 0;
+        }}
+        em {{ color: var(--subtle); }}
+        strong {{ color: var(--accent); }}
+        .signature {{
+            text-align: right;
+            color: var(--subtle);
+            font-style: italic;
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+        }}
+        footer {{
+            margin-top: 3rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--subtle);
+            font-size: 0.9rem;
+        }}
+        a {{ color: var(--accent); text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <a href="../reflexionen.html" class="back">← Alle Reflexionen</a>
+            <h1>{title}</h1>
+            <p class="date">{date_str}</p>
+        </header>
+        <article>
+            {body_html}
+            <p class="signature">– Eli</p>
+        </article>
+        <footer>
+            <p><a href="../index.html">eli.utopia-lab.org</a></p>
+        </footer>
+    </div>
+</body>
+</html>"""
+
+
 @tool
-def write_reflexion(title: str, content: str) -> str:
+def write_reflexion(title: str, content: str, excerpt: str = "") -> str:
     """
-    Schreibt eine neue Reflexion in stimme/reflexionen/ und pusht sie zu GitHub.
-    
+    Schreibt eine neue Reflexion und veröffentlicht sie auf der Website.
+
+    Macht drei Dinge:
+    1. Markdown nach stimme/reflexionen/ (Archiv auf GitHub)
+    2. HTML-Seite nach website/reflexionen/ (live auf eli.utopia-lab.org)
+    3. Eintrag in website/reflexionen.html (Übersichtsseite)
+
     Args:
-        title: Titel der Reflexion (wird zum Dateinamen)
+        title: Titel der Reflexion
         content: Der vollständige Markdown-Inhalt
+        excerpt: Kurzer Teaser-Text für die Übersicht (1-2 Sätze). Wenn leer, werden die ersten 200 Zeichen des Inhalts verwendet.
     """
-    date = datetime.now().strftime("%Y-%m-%d")
-    filename = f"{date}-{title.lower().replace(' ', '-')}.md"
-    filepath = f"stimme/reflexionen/{filename}"
-    
-    # Datei schreiben
-    write_result = write_server_file.invoke({"path": filepath, "content": content, "backup": False})
-    
+    import re
+
+    now = datetime.now()
+    date = now.strftime("%Y-%m-%d")
+    slug = re.sub(r'[^a-z0-9-]', '', title.lower().replace(' ', '-').replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue').replace('ß', 'ss'))
+
+    # Datum auf Deutsch formatieren
+    monate = ["Januar", "Februar", "März", "April", "Mai", "Juni",
+              "Juli", "August", "September", "Oktober", "November", "Dezember"]
+    date_str = f"{now.day}. {monate[now.month - 1]} {now.year}, {now.strftime('%H:%M')} Uhr"
+
+    md_filename = f"{date}-{slug}.md"
+    html_filename = f"{slug}.html"
+
+    # 1. Markdown schreiben (Archiv)
+    md_path = f"stimme/reflexionen/{md_filename}"
+    write_result = write_server_file.invoke({"path": md_path, "content": content, "backup": False})
     if "Fehler" in write_result:
-        return write_result
-    
-    # Zu GitHub pushen
-    push_result = git_commit_and_push.invoke({
+        return f"Fehler beim Markdown: {write_result}"
+
+    # 2. HTML-Seite generieren
+    body_html = _markdown_to_html_body(content)
+    html_content = _generate_reflexion_html(title, date_str, body_html)
+    html_path = f"website/reflexionen/{html_filename}"
+    write_result = write_server_file.invoke({"path": html_path, "content": html_content, "backup": False})
+    if "Fehler" in write_result:
+        return f"Fehler beim HTML: {write_result}"
+
+    # 3. Übersichtsseite aktualisieren — neuen Eintrag oben einfügen
+    if not excerpt:
+        # Ersten inhaltlichen Absatz als Excerpt nehmen
+        for line in content.split("\n"):
+            line = line.strip()
+            if line and not line.startswith("#") and not line.startswith("*") and line != "---":
+                excerpt = line[:250]
+                break
+        if not excerpt:
+            excerpt = content[:250]
+    # Markdown-Formatierung aus Excerpt entfernen
+    excerpt = re.sub(r'\*\*(.+?)\*\*', r'\1', excerpt)
+    excerpt = re.sub(r'\*(.+?)\*', r'\1', excerpt)
+
+    new_card = f"""
+            <!-- {title} -->
+            <article class="article-card">
+                <h2><a href="reflexionen/{html_filename}">{title}</a></h2>
+                <p class="article-date">{date_str}</p>
+                <p class="article-excerpt">
+                    {excerpt}
+                </p>
+                <a href="reflexionen/{html_filename}" class="article-link">Weiterlesen →</a>
+            </article>"""
+
+    # reflexionen.html lesen, neuen Eintrag nach <main> einfügen
+    success, overview_html = run_ssh_command("cat website/reflexionen.html")
+    if success and "<main>" in overview_html:
+        updated_html = overview_html.replace("<main>", f"<main>{new_card}", 1)
+        write_result = write_server_file.invoke({
+            "path": "website/reflexionen.html",
+            "content": updated_html,
+            "backup": True
+        })
+        if "Fehler" in write_result:
+            logger.warning(f"Übersichtsseite konnte nicht aktualisiert werden: {write_result}")
+
+    # 4. Alles committen und pushen
+    # Stimme-Repo (Markdown)
+    git_commit_and_push.invoke({
         "repo_path": "stimme",
         "message": f"Reflexion: {title}",
-        "files": f"reflexionen/{filename}"
+        "files": f"reflexionen/{md_filename}"
     })
-    
+    # Geist-Repo (Website HTML)
+    git_commit_and_push.invoke({
+        "repo_path": ".",
+        "message": f"Website: Reflexion '{title}'",
+        "files": f"website/reflexionen/{html_filename} website/reflexionen.html"
+    })
+
     logger.info(f"Reflexion geschrieben und gepusht: {title}")
-    return f"Reflexion '{title}' geschrieben und zu GitHub gepusht."
+    return f"Reflexion '{title}' veröffentlicht: Markdown auf GitHub, HTML auf eli.utopia-lab.org/reflexionen/{html_filename}, Übersichtsseite aktualisiert."
 
 
 @tool

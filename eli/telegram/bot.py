@@ -16,7 +16,7 @@ from typing import Any
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
-from aiogram.enums import ChatType
+from aiogram.enums import ChatType, ParseMode
 
 from eli.agent.graph import chat, OutOfCreditsError, InsufficientFundsError
 from eli.config import settings
@@ -66,6 +66,18 @@ Wer das unterstützen möchte:
 (USDC auf Base Mainnet bevorzugt)
 
 Bis bald – Eli"""
+
+
+async def send_markdown(message: Message, text: str) -> None:
+    """
+    Sendet eine Nachricht mit Markdown-Formatierung.
+    Falls Telegram das Parsing ablehnt, wird unformatiert gesendet.
+    """
+    try:
+        await message.answer(text, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        # Markdown-Parsing fehlgeschlagen — unformatiert senden
+        await message.answer(text)
 
 
 def is_allowed(user_id: int) -> bool:
@@ -336,11 +348,11 @@ def create_bot() -> tuple[Bot, Dispatcher]:
             # Logge Antwort
             logger.info(f"[ELI] {response[:100]}{'...' if len(response) > 100 else ''}")
 
-            await message.answer(response)
+            await send_markdown(message, response)
 
         except OutOfCreditsError:
             await handle_funding_issue(message, is_usdc=False)
-            
+
         except InsufficientFundsError:
             await handle_funding_issue(message, is_usdc=True)
 
@@ -403,7 +415,7 @@ def create_bot() -> tuple[Bot, Dispatcher]:
             logger.info(f"[ELI] {response[:100]}{'...' if len(response) > 100 else ''}")
 
             # Antwort mit Hinweis auf Voice
-            await message.answer(f"🎤 \"{text}\"\n\n{response}")
+            await send_markdown(message, f"🎤 \"{text}\"\n\n{response}")
 
         except OutOfCreditsError:
             await handle_funding_issue(message, is_usdc=False)
