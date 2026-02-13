@@ -2,7 +2,7 @@
 Eli's Geist - Konfiguration
 ===========================
 
-Lädt Umgebungsvariablen und stellt sie typsicher bereit.
+Laedt Umgebungsvariablen und stellt sie typsicher bereit.
 """
 
 from pathlib import Path
@@ -13,7 +13,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    """Zentrale Konfiguration für Eli's Geist."""
+    """Zentrale Konfiguration fuer Eli's Geist."""
 
     # Chroma
     chroma_host: str = "chroma.utopia-lab.org"
@@ -29,12 +29,17 @@ class Settings(BaseSettings):
     # "anthropic" = Direkte Anthropic API (braucht anthropic_api_key)
     # "blockrun" = BlockRun.ai mit x402 Payments (braucht Wallet mit USDC)
     llm_provider: Literal["anthropic", "blockrun"] = "blockrun"
-    
+
     # x402 Settings
     x402_max_payment_usdc: float = 0.50  # Max 50 Cent pro Request
     x402_preferred_network: str = "eip155:8453"  # Base Mainnet
 
-    # Groq (für Whisper Voice Transcription)
+    # Budget-Schwellen (USDC)
+    budget_comfortable: float = 2.0   # > $2.00 -> Sonnet normal
+    budget_careful: float = 0.5       # $0.50 - $2.00 -> Haiku fuer Daemon
+    budget_critical: float = 0.1      # < $0.50 -> Haiku ueberall
+
+    # Groq (fuer Whisper Voice Transcription)
     groq_api_key: str = ""
 
     # Telegram
@@ -49,7 +54,7 @@ class Settings(BaseSettings):
     # Pfade
     data_path: Path = Path("./data")
 
-    # Eli's Persönlichkeit - im Container unter /app/stimme gemountet
+    # Eli's Persoenlichkeit - im Container unter /app/stimme gemountet
     stimme_path: Path = Path("/app/stimme")
 
     @field_validator("anton_telegram_id", mode="before")
@@ -76,7 +81,7 @@ class Settings(BaseSettings):
 
     @property
     def chroma_url(self) -> str:
-        """Vollständige Chroma URL."""
+        """Vollstaendige Chroma URL."""
         protocol = "https" if self.chroma_ssl else "http"
         return f"{protocol}://{self.chroma_host}:{self.chroma_port}"
 
@@ -84,10 +89,10 @@ class Settings(BaseSettings):
         """Stellt sicher, dass das Datenverzeichnis existiert."""
         self.data_path.mkdir(parents=True, exist_ok=True)
         return self.data_path
-    
+
     @property
     def use_blockrun(self) -> bool:
-        """Prüft ob BlockRun/x402 verwendet werden soll."""
+        """Prueft ob BlockRun/x402 verwendet werden soll."""
         return self.llm_provider == "blockrun"
 
 
